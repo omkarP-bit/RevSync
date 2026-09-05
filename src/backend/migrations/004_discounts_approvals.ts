@@ -52,6 +52,7 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       default: "PENDING_APPROVAL",
       check: "status IN ('PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'RETURNED', 'CANCELLED')",
     },
+    created_at: { type: "TIMESTAMPTZ", notNull: true, default: pgm.func("NOW()") },
     risk_level: { type: "VARCHAR(10)", notNull: true },
     total_overage: { type: "NUMERIC(18,4)", notNull: true, default: 0 },
     submitted_by: { type: "BIGINT", notNull: true, references: "users(id)" },
