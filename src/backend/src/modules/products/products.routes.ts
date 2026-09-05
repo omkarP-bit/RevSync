@@ -172,6 +172,16 @@ productsRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES
       [id]
     );
 
+    const inventoryResult = await query(
+      `SELECT ii.id, ii.warehouse_id, w.name as warehouse_name, w.code as warehouse_code,
+              ii.quantity_on_hand, ii.reorder_threshold, ii.updated_at
+       FROM inventory_items ii
+       JOIN warehouses w ON ii.warehouse_id = w.id
+       WHERE ii.product_id = $1
+       ORDER BY w.name ASC`,
+      [id]
+    );
+
     res.json({
       data: {
         ...product,
@@ -182,6 +192,13 @@ productsRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES
           price_list_id: Number(pr.price_list_id),
           customer_tier_id: Number(pr.customer_tier_id),
           unit_price: Number(pr.unit_price),
+        })),
+        inventory: inventoryResult.rows.map((inv) => ({
+          ...inv,
+          id: Number(inv.id),
+          warehouse_id: Number(inv.warehouse_id),
+          quantity_on_hand: Number(inv.quantity_on_hand),
+          reorder_threshold: Number(inv.reorder_threshold),
         })),
       },
     });

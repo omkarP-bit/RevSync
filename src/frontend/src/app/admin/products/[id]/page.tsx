@@ -32,8 +32,20 @@ interface ProductDetail {
   product_type: "ONE_TIME" | "RECURRING";
   base_cost?: number;
   is_active: boolean;
+  track_inventory?: boolean;
   variants: Variant[];
   pricing: PriceListEntry[];
+  inventory: InventoryLocation[];
+}
+
+interface InventoryLocation {
+  id: number;
+  warehouse_id: number;
+  warehouse_name: string;
+  warehouse_code: string;
+  quantity_on_hand: number;
+  reorder_threshold: number;
+  updated_at: string;
 }
 
 interface Relationship {
@@ -337,6 +349,66 @@ export default function ProductDetailPage() {
                     </td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Inventory Locations */}
+      <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 space-y-4">
+        <div>
+          <h2 className="text-lg font-bold text-gray-900">Inventory Locations ({product.inventory.length})</h2>
+          <p className="text-xs text-gray-500">Stock held for this product across warehouses.</p>
+        </div>
+
+        {product.inventory.length === 0 ? (
+          product.track_inventory === false ? (
+            <p className="text-xs text-gray-500">Inventory is not tracked for this digital/software product.</p>
+          ) : (
+            <p className="text-xs text-gray-500">No stock recorded at any warehouse yet.</p>
+          )
+        ) : (
+          <div className="overflow-x-auto border rounded-lg">
+            <table className="min-w-full divide-y divide-gray-200 text-xs">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-2 text-left text-gray-500 font-medium">Warehouse</th>
+                  <th className="px-4 py-2 text-left text-gray-500 font-medium">Location Code</th>
+                  <th className="px-4 py-2 text-right text-gray-500 font-medium">Qty On Hand</th>
+                  <th className="px-4 py-2 text-right text-gray-500 font-medium">Reorder Threshold</th>
+                  <th className="px-4 py-2 text-left text-gray-500 font-medium">Stock Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 bg-white">
+                {product.inventory.map((inv) => {
+                  const lowStock = inv.quantity_on_hand <= inv.reorder_threshold;
+                  return (
+                    <tr key={inv.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-2 font-medium text-gray-800">{inv.warehouse_name}</td>
+                      <td className="px-4 py-2 font-mono text-gray-500">{inv.warehouse_code}</td>
+                      <td className="px-4 py-2 text-right font-semibold text-gray-800">{inv.quantity_on_hand}</td>
+                      <td className="px-4 py-2 text-right text-gray-600">{inv.reorder_threshold}</td>
+                      <td className="px-4 py-2">
+                        <span
+                          className={`px-2 py-0.5 text-xs font-semibold rounded-full ${
+                            inv.quantity_on_hand === 0
+                              ? "bg-gray-100 text-gray-600"
+                              : lowStock
+                              ? "bg-red-100 text-red-700"
+                              : "bg-green-100 text-green-800"
+                          }`}
+                        >
+                          {inv.quantity_on_hand === 0
+                            ? "Out of Stock"
+                            : lowStock
+                            ? "Low Stock"
+                            : "In Stock"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
