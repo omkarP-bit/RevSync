@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { api, ApiResponse } from "@/lib/api";
-import { exportReportPdf, fmtMoney } from "@/lib/pdf";
+import { exportReportPdf } from "@/lib/pdf";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface Overview {
   base_currency: string;
@@ -76,6 +77,7 @@ export default function ReportsPage() {
   const [statuses, setStatuses] = useState<PipelineStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const { format } = useCurrency();
 
   const loadReports = useCallback(async (fromDate: string, toDate: string) => {
     setLoading(true);
@@ -125,15 +127,14 @@ export default function ReportsPage() {
     });
   };
 
-  const cur = overview?.base_currency || "USD";
   const kpiCards = [
-    { label: "Invoiced Revenue", value: fmtMoney(overview?.revenue.invoiced), color: "text-blue-600", sub: `${overview?.revenue.overdue_count ?? 0} overdue` },
-    { label: "Collected", value: fmtMoney(overview?.revenue.collected), color: "text-green-600", sub: "Payments received" },
-    { label: "Outstanding", value: fmtMoney(overview?.revenue.outstanding), color: "text-red-600", sub: "Unpaid balance" },
-    { label: "Open Pipeline", value: fmtMoney(overview?.pipeline.open_value), color: "text-indigo-600", sub: `${overview?.pipeline.open_count ?? 0} open quotes` },
-    { label: "Confirmed Value", value: fmtMoney(overview?.pipeline.confirmed_value), color: "text-emerald-600", sub: `${overview?.pipeline.confirmed_count ?? 0} confirmed` },
+    { label: "Invoiced Revenue", value: format(overview?.revenue.invoiced ?? 0), color: "text-blue-600", sub: `${overview?.revenue.overdue_count ?? 0} overdue` },
+    { label: "Collected", value: format(overview?.revenue.collected ?? 0), color: "text-green-600", sub: "Payments received" },
+    { label: "Outstanding", value: format(overview?.revenue.outstanding ?? 0), color: "text-red-600", sub: "Unpaid balance" },
+    { label: "Open Pipeline", value: format(overview?.pipeline.open_value ?? 0), color: "text-indigo-600", sub: `${overview?.pipeline.open_count ?? 0} open quotes` },
+    { label: "Confirmed Value", value: format(overview?.pipeline.confirmed_value ?? 0), color: "text-emerald-600", sub: `${overview?.pipeline.confirmed_count ?? 0} confirmed` },
     { label: "Win Rate", value: `${Number(overview?.pipeline.win_rate ?? 0).toFixed(1)}%`, color: "text-purple-600", sub: "Confirmed / total" },
-    { label: "MRR (Active Subs)", value: fmtMoney(overview?.subscriptions.monthly_recurring_value), color: "text-cyan-600", sub: `${overview?.subscriptions.active_count ?? 0} active` },
+    { label: "MRR (Active Subs)", value: format(overview?.subscriptions.monthly_recurring_value ?? 0), color: "text-cyan-600", sub: `${overview?.subscriptions.active_count ?? 0} active` },
     { label: "Backordered Units", value: String(overview?.fulfillment.units_backordered ?? 0), color: "text-amber-600", sub: `${overview?.fulfillment.orders_total ?? 0} orders` },
   ];
 
@@ -216,7 +217,7 @@ export default function ReportsPage() {
         {kpiCards.map((kpi) => (
           <div key={kpi.label} className="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
             <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{kpi.label}</h3>
-            <p className={`text-2xl font-bold mt-2 ${kpi.color}`}>{loading && !overview ? "..." : `${cur} ${kpi.value}`}</p>
+            <p className={`text-2xl font-bold mt-2 ${kpi.color}`}>{loading && !overview ? "..." : kpi.value}</p>
             <span className="text-xs text-gray-400 mt-1 block">{kpi.sub}</span>
           </div>
         ))}
@@ -250,9 +251,9 @@ export default function ReportsPage() {
                 months.map((m) => (
                   <tr key={m.period} className="hover:bg-gray-50">
                     <td className="px-4 py-2.5 font-mono font-bold text-gray-900">{m.period}</td>
-                    <td className="px-4 py-2.5 text-right font-semibold text-gray-800">{cur} {fmtMoney(m.invoiced)}</td>
-                    <td className="px-4 py-2.5 text-right font-semibold text-green-700">{cur} {fmtMoney(m.collected)}</td>
-                    <td className="px-4 py-2.5 text-right font-semibold text-red-700">{cur} {fmtMoney(m.outstanding)}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-gray-800">{format(m.invoiced)}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-green-700">{format(m.collected)}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-red-700">{format(m.outstanding)}</td>
                   </tr>
                 ))
               )}
@@ -292,7 +293,7 @@ export default function ReportsPage() {
                       <td className="px-4 py-2.5 font-semibold text-gray-900">{r.sales_rep_name}</td>
                       <td className="px-4 py-2.5 text-center text-gray-600">{r.quotation_count}</td>
                       <td className="px-4 py-2.5 text-center text-gray-600">{r.confirmed_count}</td>
-                      <td className="px-4 py-2.5 text-right font-bold text-blue-700">{cur} {fmtMoney(r.confirmed_value)}</td>
+                      <td className="px-4 py-2.5 text-right font-bold text-blue-700">{format(r.confirmed_value)}</td>
                     </tr>
                   ))
                 )}
@@ -332,8 +333,8 @@ export default function ReportsPage() {
                         <span className="font-mono font-bold text-gray-800">{s.status}</span>
                       </td>
                       <td className="px-4 py-2.5 text-center text-gray-600">{s.count}</td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-gray-800">{cur} {fmtMoney(s.value)}</td>
-                      <td className="px-4 py-2.5 text-right text-gray-600">{cur} {fmtMoney(s.avg_ticket)}</td>
+                      <td className="px-4 py-2.5 text-right font-semibold text-gray-800">{format(s.value)}</td>
+                      <td className="px-4 py-2.5 text-right text-gray-600">{format(s.avg_ticket)}</td>
                     </tr>
                   ))
                 )}
@@ -376,8 +377,8 @@ export default function ReportsPage() {
                       {c.company && <span className="text-gray-400 ml-1">({c.company})</span>}
                     </td>
                     <td className="px-4 py-2.5 text-center text-gray-600">{c.invoice_count}</td>
-                    <td className="px-4 py-2.5 text-right font-semibold text-gray-800">{cur} {fmtMoney(c.invoiced)}</td>
-                    <td className="px-4 py-2.5 text-right font-semibold text-green-700">{cur} {fmtMoney(c.collected)}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-gray-800">{format(c.invoiced)}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-green-700">{format(c.collected)}</td>
                     <td className="px-4 py-2.5 text-center">
                       {c.overdue_count > 0 ? (
                         <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-[10px] font-bold">{c.overdue_count}</span>

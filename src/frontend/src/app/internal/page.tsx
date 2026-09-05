@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface Quotation {
   id: number;
@@ -17,6 +18,7 @@ interface Quotation {
 export default function InternalDashboard() {
   const [quotations, setQuotations] = useState<Quotation[]>([]);
   const [loading, setLoading] = useState(true);
+  const { format, selected, loading: currencyLoading } = useCurrency();
 
   useEffect(() => {
     async function loadStats() {
@@ -70,7 +72,7 @@ export default function InternalDashboard() {
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Open Pipeline Value</h3>
           <p className="text-3xl font-bold text-green-600 mt-2">
-            {loading ? "..." : `$${totalPipelineValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+            {loading || currencyLoading ? "..." : format(totalPipelineValue)}
           </p>
           <span className="text-xs text-gray-400 mt-1 block">Total unconfirmed deal value</span>
         </div>
@@ -134,7 +136,7 @@ export default function InternalDashboard() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right font-bold text-gray-900">
-                      ${Number(q.grand_total).toFixed(2)}
+                      {format(Number(q.grand_total) || 0)}
                     </td>
                     <td className="px-4 py-3 text-right font-semibold text-blue-700">
                       {Number(q.margin_pct).toFixed(1)}%
