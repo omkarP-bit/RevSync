@@ -19,8 +19,10 @@ const createQuotationSchema = z.object({
 });
 
 const patchQuotationSchema = z.object({
+  customer_id: z.coerce.number().int().positive().optional(),
   status: z.enum(["DRAFT", "PENDING_APPROVAL", "APPROVED", "REJECTED", "NEGOTIATION", "CONFIRMED", "CANCELLED"]).optional(),
   tax_rate_pct: z.coerce.number().nonnegative().optional(),
+  order_discount_pct: z.coerce.number().min(0).max(100).optional(),
   notes: z.string().optional(),
 });
 
@@ -45,7 +47,7 @@ const submitSchema = z.object({
 async function fetchQuoteContext(quotationId: string | number): Promise<{ isNumeric: boolean; quote: any }> {
   const isNumeric = typeof quotationId === "number" || /^\d+$/.test(String(quotationId));
   const quoteResult = await query(
-    `SELECT q.id, q.customer_id, q.currency_code, q.tax_rate_pct, q.status, c.tier_id as customer_tier_id
+    `SELECT q.id, q.customer_id, q.currency_code, q.tax_rate_pct, q.order_discount_pct, q.status, c.tier_id as customer_tier_id
      FROM quotations q
      JOIN customers c ON q.customer_id = c.id
      WHERE ${isNumeric ? "q.id = $1" : "q.public_id::text = $1"}`,
@@ -116,7 +118,11 @@ async function recalculateAndPersistQuotation(quotationId: string | number): Pro
     applied_discount_pct: Number(row.applied_discount_pct),
   }));
 
-  const calc = calculateQuotation(inputLines, Number(quote.tax_rate_pct));
+  const calc = calculateQuotation(
+    inputLines,
+    Number(quote.tax_rate_pct),
+    Number(quote.order_discount_pct || 0)
+  );
 
   const discountInputs = linesResult.map((row) => ({
     id: Number(row.id),
@@ -134,7 +140,8 @@ async function recalculateAndPersistQuotation(quotationId: string | number): Pro
       max_discount_pct: Number(r.max_discount_pct),
       is_active: Boolean(r.is_active),
     })),
-    discountInputs
+    discountInputs,
+    Number(quote.order_discount_pct || 0)
   );
 
   const approvalRuleInputs = approvalRules.map((r) => ({
@@ -177,14 +184,16 @@ async function recalculateAndPersistQuotation(quotationId: string | number): Pro
   // Update header in DB
   const updateHeaderResult = await query(
     `UPDATE quotations SET
-       subtotal = $1, discount_total = $2, tax_total = $3, grand_total = $4,
-       total_cost = $5, margin_amount = $6, margin_pct = $7,
-       total_overage = $8, risk_level = $9, updated_at = NOW()
-     WHERE id = $10
+       subtotal = $1, discount_total = $2, order_discount_pct = $3, order_discount_amount = $4,
+       tax_total = $5, grand_total = $6, total_cost = $7, margin_amount = $8, margin_pct = $9,
+       total_overage = $10, risk_level = $11, updated_at = NOW()
+     WHERE id = $12
      RETURNING *`,
     [
       calc.subtotal,
       calc.discount_total,
+      calc.order_discount_pct,
+      calc.order_discount_amount,
       calc.tax_total,
       calc.grand_total,
       calc.total_cost,
@@ -329,6 +338,8 @@ function serializeHeader(row: any) {
     sales_rep_id: Number(row.sales_rep_id),
     subtotal: Number(row.subtotal),
     discount_total: Number(row.discount_total),
+    order_discount_pct: Number(row.order_discount_pct || 0),
+    order_discount_amount: Number(row.order_discount_amount || 0),
     tax_rate_pct: Number(row.tax_rate_pct),
     tax_total: Number(row.tax_total),
     grand_total: Number(row.grand_total),
@@ -399,9 +410,10 @@ async function getFullQuotationPayload(quotationId: string | number) {
     `SELECT q.id, q.quotation_number, q.public_id, q.customer_id, c.name as customer_name,
             c.tier_id as customer_tier_id, ct.name as tier_name,
             q.sales_rep_id, u.first_name || ' ' || u.last_name as sales_rep_name,
-            q.currency_code, q.status, q.subtotal, q.discount_total, q.tax_rate_pct,
-            q.tax_total, q.grand_total, q.total_cost, q.margin_amount, q.margin_pct,
-            q.total_overage, q.risk_level, q.notes, q.created_at, q.updated_at
+            q.currency_code, q.status, q.subtotal, q.discount_total, q.order_discount_pct,
+            q.order_discount_amount, q.tax_rate_pct, q.tax_total, q.grand_total, q.total_cost,
+            q.margin_amount, q.margin_pct, q.total_overage, q.risk_level, q.notes,
+            q.created_at, q.updated_at
      FROM quotations q
      JOIN customers c ON q.customer_id = c.id
      JOIN customer_tiers ct ON c.tier_id = ct.id
@@ -418,7 +430,7 @@ async function getFullQuotationPayload(quotationId: string | number) {
 
   const linesResult = await query(
     `SELECT ql.id, ql.quotation_id, ql.product_id, p.name as product_name, p.sku as product_sku,
-            p.category_id, ql.product_variant_id, pv.name as variant_name, ql.description, ql.quantity,
+            p.category_id, p.product_type, ql.product_variant_id, pv.name as variant_name, ql.description, ql.quantity,
             ql.unit_price, ql.unit_cost, ql.applied_discount_pct, ql.discount_amount,
             ql.line_subtotal, ql.line_total, ql.line_cost, ql.line_margin,
             ql.created_at, ql.updated_at
@@ -446,7 +458,8 @@ async function getFullQuotationPayload(quotationId: string | number) {
       category_id: Number(l.category_id),
       line_subtotal: Number(l.line_subtotal),
       applied_discount_pct: Number(l.applied_discount_pct),
-    }))
+    })),
+    Number(quote.order_discount_pct || 0)
   );
 
   return {
@@ -621,6 +634,13 @@ quotationsRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.S
       });
     }
 
+    if (fields.customer_id) {
+      const custRes = await query(`SELECT currency_code FROM customers WHERE id = $1`, [fields.customer_id]);
+      if (custRes.rows.length > 0) {
+        await query(`UPDATE quotations SET currency_code = $1 WHERE id = $2`, [custRes.rows[0].currency_code, realId]);
+      }
+    }
+
     const entries = Object.entries(fields).filter(([k, v]) => v !== undefined && k !== "status");
     if (entries.length > 0) {
       const setClauses = entries.map(([k], i) => `${k} = $${i + 1}`);
@@ -631,8 +651,9 @@ quotationsRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.S
       );
     }
 
-    const refreshed = await recalculateAndPersistQuotation(realId);
-    res.json({ data: serializeHeader(refreshed.header) });
+    await recalculateAndPersistQuotation(realId);
+    const fullPayload = await getFullQuotationPayload(realId);
+    res.json({ data: fullPayload });
   } catch (err) {
     next(err);
   }

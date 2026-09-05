@@ -19,6 +19,12 @@ async function seed() {
       role_name: "Admin",
     },
     {
+      email: "admin.user@revsync.com",
+      first_name: "Admin",
+      last_name: "User",
+      role_name: "Admin",
+    },
+    {
       email: "manager@revsync.com",
       first_name: "Sarah",
       last_name: "Manager",

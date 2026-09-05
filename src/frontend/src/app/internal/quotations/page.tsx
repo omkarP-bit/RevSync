@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiResponse } from "@/lib/api";
@@ -23,7 +23,9 @@ interface Quotation {
 interface Customer {
   id: number;
   name: string;
-  currency_code: string;
+  company?: string;
+  tier_name?: string;
+  currency_code?: string;
 }
 
 const KANBAN_COLUMNS = [
@@ -51,24 +53,46 @@ export default function QuotationsListPage() {
   // Status Filter for List View
   const [selectedStatus, setSelectedStatus] = useState<string>("");
 
-  // Create Modal
-  const [showModal, setShowModal] = useState(false);
-  const [customerId, setCustomerId] = useState<number>(0);
-  const [taxRatePct, setTaxRatePct] = useState<number>(10.0);
-  const [notes, setNotes] = useState("");
+  // Customer Filter State (0 = All Customers)
+  const [filterCustomerId, setFilterCustomerId] = useState<number>(0);
+  const [customerSearchTerm, setCustomerSearchTerm] = useState<string>("");
+  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState<boolean>(false);
+  const [isSearchingCustomers, setIsSearchingCustomers] = useState<boolean>(false);
+  const customerSearchTimer = useRef<NodeJS.Timeout | null>(null);
 
   // Drag and Drop state
   const [draggedQuoteId, setDraggedQuoteId] = useState<number | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
 
-  const fetchCustomers = async () => {
-    try {
-      const res = await api.get<ApiResponse<Customer[]>>("/api/v1/customers", { limit: "100" });
-      setCustomers(res.data);
-      if (res.data.length > 0) setCustomerId(res.data[0].id);
-    } catch {
-      // ignore
+  const handleCustomerSearchInputChange = (term: string) => {
+    setCustomerSearchTerm(term);
+
+    if (customerSearchTimer.current) {
+      clearTimeout(customerSearchTimer.current);
     }
+
+    if (!term.trim()) {
+      setCustomers([]);
+      setIsCustomerDropdownOpen(false);
+      return;
+    }
+
+    setIsCustomerDropdownOpen(true);
+    setIsSearchingCustomers(true);
+
+    customerSearchTimer.current = setTimeout(async () => {
+      try {
+        const res = await api.get<ApiResponse<Customer[]>>("/api/v1/customers", {
+          search: term.trim(),
+          limit: "20",
+        });
+        setCustomers(res.data);
+      } catch {
+        setCustomers([]);
+      } finally {
+        setIsSearchingCustomers(false);
+      }
+    }, 300);
   };
 
   const fetchQuotations = async () => {
@@ -81,6 +105,9 @@ export default function QuotationsListPage() {
       };
       if (viewMode === "list" && selectedStatus) {
         params.status = selectedStatus;
+      }
+      if (filterCustomerId > 0) {
+        params.customer_id = filterCustomerId.toString();
       }
 
       const res = await api.get<ApiResponse<Quotation[]>>("/api/v1/quotations", params);
@@ -97,34 +124,20 @@ export default function QuotationsListPage() {
   };
 
   useEffect(() => {
-    fetchCustomers();
-  }, []);
-
-  useEffect(() => {
     fetchQuotations();
-  }, [page, selectedStatus, viewMode]);
+  }, [page, selectedStatus, filterCustomerId, viewMode]);
 
-  const handleCreateQuotation = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const activeCustomerId = customerId || (customers.length > 0 ? Number(customers[0].id) : 0);
-    if (!activeCustomerId) {
-      alert("Please select a customer first.");
-      return;
-    }
-
+  const handleOpenBuilderDirectly = async () => {
+    const activeCustomerId = filterCustomerId > 0 ? filterCustomerId : 1;
     try {
       const res = await api.post<ApiResponse<Quotation>>("/api/v1/quotations", {
         customer_id: Number(activeCustomerId),
-        tax_rate_pct: Number(taxRatePct) || 10.0,
-        notes: notes || undefined,
+        tax_rate_pct: 10.0,
       });
-
-      setShowModal(false);
-      setNotes("");
       // Redirect directly to full Quotation Builder screen
       router.push(`/internal/quotations/${res.data.id}`);
     } catch (err: any) {
-      alert(err.message || "Failed to create quotation");
+      alert(err.message || "Failed to start new quotation");
     }
   };
 
@@ -175,33 +188,114 @@ export default function QuotationsListPage() {
           <p className="text-xs text-gray-500">Build, configure, and track multi-line sales quotations.</p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Customer Search Filter Combobox */}
+          <div className="relative flex items-center gap-1.5 bg-gray-100 p-1 rounded-lg border border-gray-200">
+            <span className="text-xs font-bold text-gray-500 pl-2">Customer:</span>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Search customer / company..."
+                value={customerSearchTerm}
+                onFocus={() => {
+                  if (customerSearchTerm.trim().length > 0) setIsCustomerDropdownOpen(true);
+                }}
+                onChange={(e) => handleCustomerSearchInputChange(e.target.value)}
+                className="bg-white text-xs font-semibold text-gray-800 border border-gray-300 rounded px-2.5 py-1 focus:ring-2 focus:ring-blue-500 focus:outline-none w-56 truncate"
+              />
+
+              {/* Floating Recommendations Dropdown (only when typing) */}
+              {isCustomerDropdownOpen && customerSearchTerm.trim().length > 0 && (
+                <>
+                  <div
+                    className="fixed inset-0 z-20"
+                    onClick={() => setIsCustomerDropdownOpen(false)}
+                  />
+                  <div className="absolute left-0 top-full mt-1 z-30 w-72 bg-white border border-gray-200 rounded-lg shadow-xl max-h-60 overflow-y-auto divide-y divide-gray-100 text-xs">
+                    {isSearchingCustomers ? (
+                      <div className="px-3 py-3 text-gray-400 italic text-center flex items-center justify-center gap-1.5">
+                        <span className="animate-spin inline-block">⏳</span>
+                        <span>Searching database...</span>
+                      </div>
+                    ) : customers.length === 0 ? (
+                      <div className="px-3 py-3 text-gray-400 italic text-center">
+                        No matching customers found
+                      </div>
+                    ) : (
+                      customers.map((c) => (
+                        <div
+                          key={c.id}
+                          onClick={() => {
+                            setFilterCustomerId(c.id);
+                            setCustomerSearchTerm(c.name);
+                            setIsCustomerDropdownOpen(false);
+                            setPage(1);
+                          }}
+                          className={`px-3 py-2 hover:bg-blue-50 cursor-pointer transition flex flex-col gap-0.5 ${filterCustomerId === c.id ? "bg-blue-50 text-blue-700 font-bold" : "text-gray-800"
+                            }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-gray-900">{c.name}</span>
+                            {c.currency_code && (
+                              <span className="text-[10px] font-mono text-gray-400 uppercase">{c.currency_code}</span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-gray-500 flex items-center gap-1.5">
+                            {c.company && <span>{c.company}</span>}
+                            {c.tier_name && (
+                              <span className="bg-purple-50 text-purple-700 px-1 rounded font-semibold">
+                                {c.tier_name}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {(filterCustomerId > 0 || customerSearchTerm) && (
+              <button
+                onClick={() => {
+                  setFilterCustomerId(0);
+                  setCustomerSearchTerm("");
+                  setIsCustomerDropdownOpen(false);
+                  setPage(1);
+                }}
+                className="text-xs text-red-600 hover:text-red-800 font-bold px-2 py-0.5 rounded bg-red-50 hover:bg-red-100 transition"
+                title="Clear Customer Search"
+              >
+                ✕ Clear
+              </button>
+            )}
+          </div>
+
           {/* View Toggle Switch */}
           <div className="inline-flex p-0.5 bg-gray-100 rounded-lg border border-gray-200 text-xs font-semibold">
             <button
               onClick={() => setViewMode("kanban")}
-              className={`px-3 py-1.5 rounded-md transition flex items-center gap-1.5 ${
-                viewMode === "kanban"
-                  ? "bg-white text-blue-700 shadow-xs font-bold"
-                  : "text-gray-600 hover:text-gray-900"
-              }`}
+              className={`px-3 py-1.5 rounded-md transition flex items-center gap-1.5 ${viewMode === "kanban"
+                ? "bg-white text-blue-700 shadow-xs font-bold"
+                : "text-gray-600 hover:text-gray-900"
+                }`}
             >
               📊 Kanban Board
             </button>
             <button
               onClick={() => setViewMode("list")}
-              className={`px-3 py-1.5 rounded-md transition flex items-center gap-1.5 ${
-                viewMode === "list"
-                  ? "bg-white text-blue-700 shadow-xs font-bold"
-                  : "text-gray-600 hover:text-gray-900"
-              }`}
+              className={`px-3 py-1.5 rounded-md transition flex items-center gap-1.5 ${viewMode === "list"
+                ? "bg-white text-blue-700 shadow-xs font-bold"
+                : "text-gray-600 hover:text-gray-900"
+                }`}
             >
               📋 List View
             </button>
           </div>
 
           <button
-            onClick={() => setShowModal(true)}
+            onClick={handleOpenBuilderDirectly}
             className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm font-semibold transition shadow-xs"
           >
             + New Quotation
@@ -238,9 +332,8 @@ export default function QuotationsListPage() {
                     e.preventDefault();
                     handleDrop(col.id);
                   }}
-                  className={`bg-gray-50/90 rounded-xl border border-t-4 ${col.borderTop} p-3 flex flex-col min-h-[550px] transition-all ${
-                    isOver ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-400/50" : "border-gray-200"
-                  }`}
+                  className={`bg-gray-50/90 rounded-xl border border-t-4 ${col.borderTop} p-3 flex flex-col min-h-[550px] transition-all ${isOver ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-400/50" : "border-gray-200"
+                    }`}
                 >
                   {/* Column Header */}
                   <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-200">
@@ -319,11 +412,10 @@ export default function QuotationsListPage() {
                   setSelectedStatus(tab.value);
                   setPage(1);
                 }}
-                className={`py-2 px-4 border-b-2 font-medium whitespace-nowrap transition ${
-                  selectedStatus === tab.value
-                    ? "border-blue-600 text-blue-600 font-bold"
-                    : "border-transparent text-gray-500 hover:text-gray-700"
-                }`}
+                className={`py-2 px-4 border-b-2 font-medium whitespace-nowrap transition ${selectedStatus === tab.value
+                  ? "border-blue-600 text-blue-600 font-bold"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+                  }`}
               >
                 {tab.label}
               </button>
@@ -366,17 +458,16 @@ export default function QuotationsListPage() {
                       <td className="px-6 py-4 font-bold text-gray-700">{q.currency_code}</td>
                       <td className="px-6 py-4">
                         <span
-                          className={`px-2 py-0.5 text-xs font-bold rounded ${
-                            q.status === "APPROVED"
-                              ? "bg-green-100 text-green-800"
-                              : q.status === "PENDING_APPROVAL"
+                          className={`px-2 py-0.5 text-xs font-bold rounded ${q.status === "APPROVED"
+                            ? "bg-green-100 text-green-800"
+                            : q.status === "PENDING_APPROVAL"
                               ? "bg-amber-100 text-amber-800"
                               : q.status === "CONFIRMED"
-                              ? "bg-blue-100 text-blue-800"
-                              : q.status === "NEGOTIATION"
-                              ? "bg-purple-100 text-purple-800"
-                              : "bg-gray-100 text-gray-700"
-                          }`}
+                                ? "bg-blue-100 text-blue-800"
+                                : q.status === "NEGOTIATION"
+                                  ? "bg-purple-100 text-purple-800"
+                                  : "bg-gray-100 text-gray-700"
+                            }`}
                         >
                           {q.status}
                         </span>
@@ -423,65 +514,6 @@ export default function QuotationsListPage() {
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Create Modal */}
-      {showModal && (
-        <div className="fixed inset-0 bg-gray-900/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl p-6 max-w-md w-full shadow-xl border border-gray-100">
-            <h2 className="text-lg font-bold text-gray-900 mb-4">Start New Quotation</h2>
-            <form onSubmit={handleCreateQuotation} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Select Customer</label>
-                <select
-                  value={customerId}
-                  onChange={(e) => setCustomerId(Number(e.target.value))}
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
-                >
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.currency_code})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Tax Rate (%)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  required
-                  value={taxRatePct}
-                  onChange={(e) => setTaxRatePct(parseFloat(e.target.value) || 0)}
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Notes / Terms</label>
-                <textarea
-                  rows={2}
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
-                  placeholder="Optional internal deal notes"
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="px-4 py-2 border border-gray-300 rounded text-sm hover:bg-gray-50 font-medium text-gray-700"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded text-sm font-semibold hover:bg-blue-700">
-                  Open Builder &rarr;
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}

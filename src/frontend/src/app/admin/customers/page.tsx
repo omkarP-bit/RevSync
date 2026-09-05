@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
 
 interface Customer {
@@ -132,7 +133,10 @@ export default function CustomersPage() {
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">Customers</h1>
+        <h1 className="text-2xl font-bold">Customers Directory</h1>
+        <button className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm">
+          + Add Customer
+        </button>
       </div>
 
       {note && (
@@ -155,7 +159,7 @@ export default function CustomersPage() {
                   <th className="p-3">Payment</th>
                   <th className="p-3">Upfront %</th>
                   <th className="p-3">Status</th>
-                  <th className="p-3">Actions</th>
+                  <th className="p-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -169,13 +173,19 @@ export default function CustomersPage() {
                     <td className="p-3 text-sm text-gray-600">{c.payment_terms}</td>
                     <td className="p-3 text-sm text-gray-600">{c.upfront_payment_pct}%</td>
                     <td className="p-3"><span className={`px-2 py-1 rounded text-xs ${c.status === "ACTIVE" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-700"}`}>{c.status}</span></td>
-                    <td className="p-3">
+                    <td className="p-3 text-right flex items-center justify-end gap-3">
                       <button
                         onClick={() => evaluate(c)}
-                        className="text-purple-600 hover:text-purple-800 font-semibold text-sm"
+                        className="text-purple-600 hover:text-purple-800 font-semibold text-xs"
                       >
                         Evaluate Tier
                       </button>
+                      <Link
+                        href={`/internal/quotations?customer_id=${c.id}`}
+                        className="text-blue-600 hover:text-blue-900 font-semibold text-xs hover:underline"
+                      >
+                        View Quotes &rarr;
+                      </Link>
                     </td>
                   </tr>
                 ))}

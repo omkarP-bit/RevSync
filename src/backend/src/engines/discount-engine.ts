@@ -25,6 +25,8 @@ export interface DiscountOutcomeLine extends DiscountLineInput {
 
 export interface DiscountOutcome {
   lines: DiscountOutcomeLine[];
+  order_discount_pct: number;
+  order_overage: number;
   total_allowed_discount_amount: number;
   total_applied_discount_amount: number;
   total_overage: number;
@@ -54,15 +56,17 @@ function findRule(
 // Deterministic discount governance:
 // - allowed_discount_pct comes from the active rule for the confirmed customer tier x product category.
 // - line_overage = max(0, applied_discount_pct - allowed_discount_pct) in percentage points.
-// - total_overage sums the per-line overages across the quotation (the approval engine thresholds compare against it).
+// - order_overage = orderDiscountPct (order-level discounts contribute directly to overage)
+// - total_overage sums the per-line overages plus order_overage across the quotation.
 export function evaluateDiscounts(
   tierId: number,
   rules: DiscountRule[],
-  lines: DiscountLineInput[]
+  lines: DiscountLineInput[],
+  orderDiscountPct: number = 0
 ): DiscountOutcome {
   let totalAllowed = 0;
   let totalApplied = 0;
-  let totalOverage = 0;
+  let lineOverageSum = 0;
 
   const evaluatedLines: DiscountOutcomeLine[] = lines.map((line) => {
     const subtotal = Math.max(0, line.line_subtotal);
@@ -76,7 +80,7 @@ export function evaluateDiscounts(
 
     totalAllowed += allowedAmount;
     totalApplied += appliedAmount;
-    totalOverage += lineOverage;
+    lineOverageSum += lineOverage;
 
     let reason: string | null = null;
     if (appliedPct > allowedPct) {
@@ -97,10 +101,16 @@ export function evaluateDiscounts(
     };
   });
 
+  const validOrderDiscPct = Math.max(0, Math.min(100, orderDiscountPct || 0));
+  const orderOverage = round2(validOrderDiscPct);
+  const totalOverage = round2(lineOverageSum + orderOverage);
+
   return {
     lines: evaluatedLines,
+    order_discount_pct: orderOverage,
+    order_overage: orderOverage,
     total_allowed_discount_amount: round4(totalAllowed),
     total_applied_discount_amount: round4(totalApplied),
-    total_overage: round2(totalOverage),
+    total_overage: totalOverage,
   };
 }

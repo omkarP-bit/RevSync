@@ -19,6 +19,9 @@ export interface CalculatedLine extends InputLine {
 
 export interface QuotationTotals {
   subtotal: number;
+  line_discount_total: number;
+  order_discount_pct: number;
+  order_discount_amount: number;
   discount_total: number;
   tax_rate_pct: number;
   tax_total: number;
@@ -41,10 +44,11 @@ function round2(val: number): number {
 
 export function calculateQuotation(
   lines: InputLine[],
-  taxRatePct: number = 10.00
+  taxRatePct: number = 10.00,
+  orderDiscountPct: number = 0
 ): QuotationTotals {
   let subtotal = 0;
-  let discount_total = 0;
+  let line_discount_total = 0;
   let total_cost = 0;
 
   const calculatedLines: CalculatedLine[] = lines.map((line) => {
@@ -60,7 +64,7 @@ export function calculateQuotation(
     const line_margin = round4(line_total - line_cost);
 
     subtotal += line_subtotal;
-    discount_total += discount_amount;
+    line_discount_total += discount_amount;
     total_cost += line_cost;
 
     return {
@@ -78,8 +82,13 @@ export function calculateQuotation(
   });
 
   subtotal = round4(subtotal);
-  discount_total = round4(discount_total);
+  line_discount_total = round4(line_discount_total);
   total_cost = round4(total_cost);
+
+  const netLineSubtotal = round4(subtotal - line_discount_total);
+  const validOrderDiscPct = Math.max(0, Math.min(100, orderDiscountPct || 0));
+  const order_discount_amount = round4(netLineSubtotal * (validOrderDiscPct / 100));
+  const discount_total = round4(line_discount_total + order_discount_amount);
 
   const taxableBase = round4(subtotal - discount_total);
   const validTaxRate = Math.max(0, taxRatePct);
@@ -91,6 +100,9 @@ export function calculateQuotation(
 
   return {
     subtotal,
+    line_discount_total,
+    order_discount_pct: round2(validOrderDiscPct),
+    order_discount_amount,
     discount_total,
     tax_rate_pct: round2(validTaxRate),
     tax_total,
@@ -98,8 +110,8 @@ export function calculateQuotation(
     total_cost,
     margin_amount,
     margin_pct,
-    total_overage: 0, // Stub contract for Phase 4
-    risk_level: "LOW", // Stub contract for Phase 4
+    total_overage: 0,
+    risk_level: "LOW",
     lines: calculatedLines,
   };
 }

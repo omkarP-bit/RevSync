@@ -10,6 +10,7 @@
     "migrate:down": "node-pg-migrate down",
     "migrate:create": "node-pg-migrate create",
     "seed": "tsx src/database/seed.ts",
+    "seed:10k": "tsx src/database/seed10kQuotations.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

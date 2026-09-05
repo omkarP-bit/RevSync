@@ -78,6 +78,11 @@ customersRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_M
     const params: unknown[] = [];
     let paramIdx = 1;
 
+    if (req.query.search) {
+      where.push(`(c.name ILIKE $${paramIdx} OR c.company ILIKE $${paramIdx} OR c.email ILIKE $${paramIdx})`);
+      params.push(`%${req.query.search}%`);
+      paramIdx++;
+    }
     if (req.query.status) {
       where.push(`c.status = $${paramIdx++}`);
       params.push(req.query.status);
@@ -113,6 +118,60 @@ customersRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALE
   try {
     const customer = await getCustomerOrThrow(req.params.id);
     res.json({ data: customer });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/v1/customers/:id/quotations
+customersRouter.get("/:id/quotations", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 50));
+    const offset = (page - 1) * limit;
+
+    const custResult = await query(`SELECT id, name, currency_code, tier_id FROM customers WHERE id = $1`, [id]);
+    if (custResult.rows.length === 0) {
+      throw new NotFoundError("Customer", id);
+    }
+    const customer = custResult.rows[0];
+
+    const countResult = await query(`SELECT COUNT(*) FROM quotations WHERE customer_id = $1`, [id]);
+    const total = parseInt(countResult.rows[0].count);
+
+    const result = await query(
+      `SELECT q.id, q.quotation_number, q.public_id, q.customer_id, c.name as customer_name,
+              q.sales_rep_id, u.first_name || ' ' || u.last_name as sales_rep_name,
+              q.currency_code, q.status, q.subtotal, q.discount_total, q.tax_rate_pct,
+              q.tax_total, q.grand_total, q.margin_amount, q.margin_pct, q.risk_level,
+              q.total_overage, q.created_at, q.updated_at
+       FROM quotations q
+       JOIN customers c ON q.customer_id = c.id
+       JOIN users u ON q.sales_rep_id = u.id
+       WHERE q.customer_id = $1
+       ORDER BY q.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [id, limit, offset]
+    );
+
+    res.json({
+      customer,
+      data: result.rows.map((row) => ({
+        ...row,
+        id: Number(row.id),
+        customer_id: Number(row.customer_id),
+        sales_rep_id: Number(row.sales_rep_id),
+        subtotal: Number(row.subtotal),
+        discount_total: Number(row.discount_total),
+        tax_total: Number(row.tax_total),
+        grand_total: Number(row.grand_total),
+        margin_amount: Number(row.margin_amount),
+        margin_pct: Number(row.margin_pct),
+        total_overage: Number(row.total_overage),
+      })),
+      meta: { page, limit, total, total_pages: Math.ceil(total / limit) },
+    });
   } catch (err) {
     next(err);
   }

@@ -54,6 +54,11 @@ productsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MA
     const params: unknown[] = [];
     let paramIdx = 1;
 
+    if (req.query.search) {
+      where.push(`(p.name ILIKE $${paramIdx} OR p.sku ILIKE $${paramIdx})`);
+      params.push(`%${req.query.search}%`);
+      paramIdx++;
+    }
     if (req.query.category_id) {
       where.push(`p.category_id = $${paramIdx++}`);
       params.push(parseInt(req.query.category_id as string));
