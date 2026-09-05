@@ -27,6 +27,9 @@ import { subscriptionsPortalRouter, walletPortalRouter } from "./modules/subscri
 import { dealHealthRouter } from "./modules/deal-health/deal-health.routes.js";
 import { reportsRouter } from "./modules/reports/reports.routes.js";
 
+import { customerAuthRouter } from "./modules/auth/customerAuth.routes.js";
+import { quotationsPortalRouter, portalDashboardRouter } from "./modules/quotations/quotationsPortal.routes.js";
+
 async function main() {
   const config = loadConfig();
   const logger = getLogger();
@@ -39,9 +42,12 @@ async function main() {
   app.use(express.json());
   app.use(requestLogger);
 
-  // Test DB connection
+  // Test DB connection & ensure schema constraints
   try {
     await getPool().query("SELECT 1");
+    await getPool().query("ALTER TABLE invoices ALTER COLUMN quotation_id DROP NOT NULL").catch(() => {});
+    await getPool().query("ALTER TABLE invoice_payments DROP CONSTRAINT IF EXISTS invoice_payments_payment_method_check").catch(() => {});
+    await getPool().query("ALTER TABLE invoice_payments ADD CONSTRAINT invoice_payments_payment_method_check CHECK (payment_method IN ('CASH', 'BANK_TRANSFER', 'CARD', 'CHECK', 'CREDIT_WALLET', 'OTHER'))").catch(() => {});
     logger.info("Database connected");
   } catch (err) {
     logger.error("Database connection failed");
@@ -50,6 +56,7 @@ async function main() {
 
   // Routes
   app.use("/api/v1", healthRouter);
+  app.use("/api/v1/auth/customer", customerAuthRouter);
   app.use("/api/v1/auth", authRouter);
   app.use("/api/v1/customers", customersRouter);
   app.use("/api/v1/categories", categoriesRouter);
@@ -67,6 +74,8 @@ async function main() {
   app.use("/api/v1/subscriptions", subscriptionsRouter);
   app.use("/api/v1/deal-health", dealHealthRouter);
   app.use("/api/v1/reports", reportsRouter);
+  app.use("/api/v1/portal/dashboard", portalDashboardRouter);
+  app.use("/api/v1/portal/quotations", quotationsPortalRouter);
   app.use("/api/v1/portal/negotiations", negotiationsPortalRouter);
   app.use("/api/v1/portal/invoices", invoicesPortalRouter);
   app.use("/api/v1/portal/subscriptions", subscriptionsPortalRouter);

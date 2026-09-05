@@ -18,7 +18,7 @@ async function generateInvoiceNumber(client: PoolClient): Promise<string> {
 export async function createSubscriptionsForQuotation(
   client: PoolClient,
   quotationId: number,
-  userId: number
+  userId: number | null
 ): Promise<number[]> {
   // Idempotency check: If subscriptions already exist for this quote, return them.
   const existing = await client.query(
@@ -125,7 +125,7 @@ export async function createSubscriptionsForQuotation(
       action: "SUBSCRIPTION_CREATED",
       before: null,
       after: { quotation_id: quotationId, product_id: line.product_id, quantity: line.quantity },
-      performedBy: userId,
+      performedBy: userId ?? undefined,
       reason: "Generated automatically from confirmed quotation",
     });
   }
@@ -295,7 +295,7 @@ export async function changeSubscription(
   prorationInvoiceId?: number;
 }> {
   const subRes = await client.query(
-    `SELECT s.id, s.customer_id, s.subscription_plan_id, s.quantity, s.unit_price, s.currency,
+    `SELECT s.id, s.customer_id, s.quotation_id, s.subscription_plan_id, s.quantity, s.unit_price, s.currency,
             s.status, s.current_period_start, s.current_period_end, s.next_billing_date,
             sp.name AS plan_name, sp.price AS plan_price
      FROM subscriptions s
@@ -401,12 +401,13 @@ export async function changeSubscription(
     const dueDate = new Date(Date.now() + 15 * 86400000);
     const invRes = await client.query(
       `INSERT INTO invoices
-         (invoice_number, subscription_id, customer_id, currency_code, invoice_type, status,
+         (invoice_number, quotation_id, subscription_id, customer_id, currency_code, invoice_type, status,
           due_date, subtotal, discount_total, tax_rate_pct, tax_total, grand_total, total_paid, notes)
-       VALUES ($1, $2, $3, $4, 'PRORATION', 'ISSUED', $5, $6, 0, 0, 0, $6, 0, $7)
+       VALUES ($1, $2, $3, $4, $5, 'PRORATION', 'ISSUED', $6, $7, 0, 0, 0, $7, 0, $8)
        RETURNING id`,
       [
         invoiceNumber,
+        sub.quotation_id ? Number(sub.quotation_id) : null,
         params.subscriptionId,
         Number(sub.customer_id),
         sub.currency,

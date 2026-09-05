@@ -132,9 +132,13 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
   pgm.createIndex("billing_schedules", ["subscription_id", "status"], { name: "idx_billing_schedules_sub_status" });
   pgm.createIndex("billing_schedules", ["status", "billing_date"], { name: "idx_billing_schedules_due" });
 
-  // 7. Update invoices table:
+  // 7. Update invoices and invoice_payments table:
   pgm.dropConstraint("invoices", "invoices_quotation_id_key", { ifExists: true });
-  pgm.alterColumn("invoices", "quotation_id", { null: true });
+  pgm.alterColumn("invoices", "quotation_id", { notNull: false });
+  pgm.dropConstraint("invoice_payments", "invoice_payments_payment_method_check", { ifExists: true });
+  pgm.addConstraint("invoice_payments", "invoice_payments_payment_method_check", {
+    check: "payment_method IN ('CASH', 'BANK_TRANSFER', 'CARD', 'CHECK', 'CREDIT_WALLET', 'OTHER')",
+  });
 
   pgm.addColumns("invoices", {
     subscription_id: { type: "BIGINT", references: "subscriptions(id)" },

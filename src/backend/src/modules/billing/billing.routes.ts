@@ -4,6 +4,7 @@ import { authenticate, requireRole, ROLES } from "../../middleware/auth.js";
 import { authenticateCustomer } from "../../middleware/customerAuth.js";
 import { ConflictError, NotFoundError, UnprocessableEntityError, ValidationError } from "../../shared/errors.js";
 import { calculateQuotation } from "../../engines/quotation-engine.js";
+import { applyWalletToInvoice, getOrCreateWallet } from "../../engines/wallet-engine.js";
 import { z } from "zod";
 
 export const invoicesRouter = Router();
@@ -15,7 +16,7 @@ creditNotesRouter.use(authenticate);
 export const invoicesPortalRouter = Router();
 invoicesPortalRouter.use(authenticateCustomer);
 
-const PAYMENT_METHODS = ["CASH", "BANK_TRANSFER", "CARD", "CHECK", "OTHER"] as const;
+const PAYMENT_METHODS = ["CASH", "BANK_TRANSFER", "CARD", "CHECK", "CREDIT_WALLET", "OTHER"] as const;
 const INVOICE_STATUSES = ["ISSUED", "PARTIALLY_PAID", "PAID", "CANCELLED"] as const;
 
 const generateInvoiceSchema = z.object({
@@ -417,7 +418,7 @@ invoicesRouter.post("/:id/payments", requireRole(ROLES.ADMIN, ROLES.FINANCE), as
     const data = paymentSchema.parse(req.body);
 
     const invoiceResult = await query(
-      `SELECT id, grand_total, total_paid, status FROM invoices WHERE id = $1`,
+      `SELECT id, customer_id, currency_code, grand_total, total_paid, status FROM invoices WHERE id = $1`,
       [id]
     );
     if (invoiceResult.rows.length === 0) {
@@ -443,6 +444,21 @@ invoicesRouter.post("/:id/payments", requireRole(ROLES.ADMIN, ROLES.FINANCE), as
         return;
       }
       throw new ConflictError("Payment reference already used on a different invoice");
+    }
+
+    if (data.payment_method === "CREDIT_WALLET") {
+      const walletApplied = await withTransaction(async (client) => {
+        return applyWalletToInvoice(client, {
+          customerId: Number(invoice.customer_id),
+          invoiceAmount: data.amount_paid,
+          invoiceId: Number(invoice.id),
+          currencyCode: invoice.currency_code,
+        });
+      });
+      if (walletApplied <= 0) {
+        throw new UnprocessableEntityError("Customer credit wallet balance is 0 or insufficient");
+      }
+      data.amount_paid = walletApplied;
     }
 
     const newTotalPaid = Number((Number(invoice.total_paid) + Number(data.amount_paid)).toFixed(4));
@@ -697,7 +713,7 @@ invoicesPortalRouter.get("/", async (req: Request, res: Response, next: NextFunc
   try {
     const customerId = (req as any).customer.customerId;
     const result = await query(
-      `SELECT i.id, i.invoice_number, i.public_id, i.customer_id, i.status,
+      `SELECT i.id, i.invoice_number, i.public_id, i.customer_id, i.currency_code, i.status,
               i.issue_date, i.due_date, i.grand_total, i.total_paid, i.created_at,
               q.quotation_number
        FROM invoices i
@@ -712,6 +728,7 @@ invoicesPortalRouter.get("/", async (req: Request, res: Response, next: NextFunc
         invoice_number: row.invoice_number,
         public_id: row.public_id,
         quotation_number: row.quotation_number,
+        currency_code: row.currency_code,
         status: row.status,
         issue_date: row.issue_date,
         due_date: row.due_date,
@@ -732,7 +749,7 @@ invoicesPortalRouter.get("/:publicId", async (req: Request, res: Response, next:
     const customerId = (req as any).customer.customerId;
     const { publicId } = req.params;
     const result = await query(
-      `SELECT i.id, i.invoice_number, i.quotation_id, i.customer_id, i.status,
+      `SELECT i.id, i.invoice_number, i.quotation_id, i.customer_id, i.currency_code, i.status,
               i.issue_date, i.due_date, i.grand_total, i.total_paid,
               q.quotation_number
        FROM invoices i
@@ -768,6 +785,7 @@ invoicesPortalRouter.get("/:publicId", async (req: Request, res: Response, next:
       data: {
         invoice_number: invoice.invoice_number,
         quotation_number: invoice.quotation_number,
+        currency_code: invoice.currency_code,
         status: invoice.status,
         issue_date: invoice.issue_date,
         due_date: invoice.due_date,
@@ -790,6 +808,77 @@ invoicesPortalRouter.get("/:publicId", async (req: Request, res: Response, next:
           payment_method: row.payment_method,
           payment_date: row.payment_date,
         })),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/v1/portal/invoices/:publicId/apply-wallet — customer credit wallet invoice payment
+invoicesPortalRouter.post("/:publicId/apply-wallet", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const customerId = (req as any).customer.customerId;
+    const { publicId } = req.params;
+
+    const result = await query(
+      `SELECT id, invoice_number, customer_id, currency_code, status, grand_total, total_paid
+       FROM invoices WHERE public_id::text = $1`,
+      [publicId]
+    );
+
+    if (result.rows.length === 0) {
+      throw new NotFoundError("Invoice", publicId);
+    }
+    const invoice = result.rows[0];
+    if (Number(invoice.customer_id) !== Number(customerId)) {
+      throw new NotFoundError("Invoice", publicId);
+    }
+    if (invoice.status === "CANCELLED" || invoice.status === "PAID") {
+      throw new UnprocessableEntityError(`Invoice is already ${invoice.status.toLowerCase()}`);
+    }
+
+    const balanceDue = Number(Number(invoice.grand_total - invoice.total_paid).toFixed(4));
+    if (balanceDue <= 0) {
+      throw new UnprocessableEntityError("Invoice has no balance due");
+    }
+
+    const { offset, newTotalPaid, newStatus } = await withTransaction(async (client) => {
+      const walletOffset = await applyWalletToInvoice(client, {
+        customerId,
+        invoiceAmount: balanceDue,
+        invoiceId: Number(invoice.id),
+        currencyCode: invoice.currency_code,
+      });
+
+      if (walletOffset <= 0) {
+        throw new UnprocessableEntityError("Credit wallet balance is 0 or insufficient");
+      }
+
+      const totalPaid = Number((Number(invoice.total_paid) + walletOffset).toFixed(4));
+      const status = totalPaid >= Number(invoice.grand_total) - 0.005 ? "PAID" : "PARTIALLY_PAID";
+
+      await client.query(
+        `UPDATE invoices SET wallet_offset_amount = COALESCE(wallet_offset_amount, 0) + $1, total_paid = $2, status = $3, updated_at = NOW() WHERE id = $4`,
+        [walletOffset, totalPaid, status, Number(invoice.id)]
+      );
+
+      await client.query(
+        `INSERT INTO invoice_payments
+           (invoice_id, reference, amount_paid, payment_date, payment_method, received_by, notes)
+         VALUES ($1, $2, $3, NOW(), 'CREDIT_WALLET', NULL, $4)`,
+        [Number(invoice.id), `WAL-${Date.now().toString(36).toUpperCase()}`, walletOffset, "Applied from Customer Credit Wallet"]
+      );
+
+      return { offset: walletOffset, newTotalPaid: totalPaid, newStatus: status };
+    });
+
+    res.json({
+      data: {
+        applied_amount: offset,
+        invoice_number: invoice.invoice_number,
+        new_total_paid: newTotalPaid,
+        new_status: newStatus,
       },
     });
   } catch (err) {

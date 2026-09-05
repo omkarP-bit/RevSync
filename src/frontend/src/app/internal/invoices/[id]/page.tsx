@@ -71,7 +71,7 @@ const statusStyles: Record<string, string> = {
   CANCELLED: "bg-gray-100 text-gray-600",
 };
 
-const paymentMethods = ["CASH", "BANK_TRANSFER", "CARD", "CHECK", "OTHER"];
+const paymentMethods = ["CASH", "BANK_TRANSFER", "CARD", "CHECK", "CREDIT_WALLET", "OTHER"];
 
 export default function InvoiceDetailPage() {
   const params = useParams();
