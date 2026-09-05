@@ -1,9 +1,10 @@
-import { query } from "../database/pool.js";
+import { query, withTransaction } from "../database/pool.js";
 import { writeAuditLog } from "./audit.js";
-import { NotFoundError } from "./errors.js";
+import { NotFoundError, ConflictError, UnprocessableEntityError } from "./errors.js";
 import { calculateQuotation } from "../engines/quotation-engine.js";
 import { evaluateDiscounts } from "../engines/discount-engine.js";
 import { mapRiskLevel, selectRiskRule, buildSteps, RiskLevel } from "../engines/approval-engine.js";
+import { createSubscriptionsForQuotation } from "../engines/subscription-engine.js";
 
 // Shared quotation recalculation + approval machinery used by both the
 // quotations module (Phase 3/4) and the negotiations module (Phase 6), so a
@@ -293,4 +294,64 @@ export async function reopenApprovalAfterEdit(
     performedBy: userId,
     reason: "Auto re-opened approval after discount edit",
   });
+}
+
+export async function executeQuotationConfirmation(
+  quotationId: number | string,
+  actorId?: number | null,
+  reason?: string
+): Promise<any> {
+  const { quote } = await fetchQuoteContext(quotationId);
+  const realId = Number(quote.id);
+
+  if (quote.status === "CONFIRMED") {
+    const refreshed = await fetchQuoteContext(realId);
+    return refreshed.quote;
+  }
+
+  if (quote.status !== "APPROVED") {
+    throw new UnprocessableEntityError("Only APPROVED quotations can be confirmed");
+  }
+
+  const openApproval = await query(
+    `SELECT id FROM approval_requests WHERE quotation_id = $1 AND status = 'PENDING_APPROVAL'`,
+    [realId]
+  );
+  if (openApproval.rows.length > 0) {
+    throw new UnprocessableEntityError("Approval is still pending for this quotation");
+  }
+
+  const openNegotiationReqs = await query(
+    `SELECT nr.id FROM negotiation_requests nr
+     JOIN negotiations n ON nr.negotiation_id = n.id
+     WHERE n.quotation_id = $1 AND nr.status = 'PENDING'`,
+    [realId]
+  );
+  if (openNegotiationReqs.rows.length > 0) {
+    throw new UnprocessableEntityError("Quotation has unresolved negotiation requests");
+  }
+
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE quotations SET status = 'CONFIRMED', updated_at = NOW() WHERE id = $1`,
+      [realId]
+    );
+    await createSubscriptionsForQuotation(client, realId, actorId ?? null);
+    await client.query(
+      `INSERT INTO audit_logs (entity_type, entity_id, action, before, after, performed_by, reason)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7)`,
+      [
+        "quotations",
+        String(realId),
+        "CONFIRMED",
+        JSON.stringify({ status: quote.status }),
+        JSON.stringify({ status: "CONFIRMED" }),
+        actorId ?? null,
+        reason || "Quotation confirmed; recurring subscriptions & billing schedules initialized",
+      ]
+    );
+  });
+
+  const refreshed = await fetchQuoteContext(realId);
+  return refreshed.quote;
 }

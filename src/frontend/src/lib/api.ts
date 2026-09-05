@@ -18,6 +18,7 @@ export interface ApiError {
 
 class ApiClient {
   private token: string | null = null;
+  private customerToken: string | null = null;
 
   setToken(token: string | null) {
     this.token = token;
@@ -35,15 +36,33 @@ class ApiClient {
     return this.token;
   }
 
+  setCustomerToken(token: string | null) {
+    this.customerToken = token;
+    if (token) {
+      localStorage.setItem("customer_token", token);
+    } else {
+      localStorage.removeItem("customer_token");
+    }
+  }
+
+  getCustomerToken(): string | null {
+    if (!this.customerToken) {
+      this.customerToken = typeof window !== "undefined" ? localStorage.getItem("customer_token") : null;
+    }
+    return this.customerToken;
+  }
+
   async request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...((options.headers as Record<string, string>) || {}),
     };
 
-    const token = this.getToken();
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
+    const isPortalPath = path.startsWith("/api/v1/portal");
+    const activeToken = isPortalPath ? this.getCustomerToken() : this.getToken();
+
+    if (activeToken) {
+      headers["Authorization"] = `Bearer ${activeToken}`;
     }
 
     const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
@@ -88,10 +107,37 @@ class ApiClient {
     return res.data;
   }
 
+  async customerLogin(email: string, password: string) {
+    const res = await this.post<ApiResponse<{
+      token: string;
+      customer: { id: number; name: string; email: string; company: string | null; status: string; currency_code: string; tier_name: string };
+    }>>("/api/v1/auth/customer/login", { email, password });
+
+    this.setCustomerToken(res.data.token);
+    localStorage.setItem("customer_info", JSON.stringify(res.data.customer));
+    return res.data;
+  }
+
+  async customerSetupPassword(setupToken: string, password: string) {
+    const res = await this.post<ApiResponse<{
+      token: string;
+      customer: { id: number; name: string; email: string; company: string | null; status: string; currency_code: string; tier_name: string };
+    }>>("/api/v1/auth/customer/setup-password", { setup_token: setupToken, password });
+
+    this.setCustomerToken(res.data.token);
+    localStorage.setItem("customer_info", JSON.stringify(res.data.customer));
+    return res.data;
+  }
+
   logout() {
     this.setToken(null);
     localStorage.removeItem("refresh_token");
     localStorage.removeItem("user");
+  }
+
+  customerLogout() {
+    this.setCustomerToken(null);
+    localStorage.removeItem("customer_info");
   }
 }
 

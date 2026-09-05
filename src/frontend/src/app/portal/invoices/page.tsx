@@ -8,6 +8,7 @@ interface PortalInvoice {
   invoice_number: string;
   public_id: string;
   quotation_number: string;
+  currency_code?: string;
   status: string;
   issue_date: string;
   due_date: string;
@@ -85,10 +86,10 @@ export default function PortalInvoicesPage() {
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right font-extrabold text-gray-900">
-                    ${Number(inv.grand_total).toFixed(2)}
+                    {inv.currency_code || "USD"} {Number(inv.grand_total).toFixed(2)}
                   </td>
                   <td className="px-6 py-4 text-right font-semibold text-red-600">
-                    ${Number(inv.balance_due).toFixed(2)}
+                    {inv.currency_code || "USD"} {Number(inv.balance_due).toFixed(2)}
                   </td>
                   <td className="px-6 py-4 text-right">
                     <span className="text-blue-600 font-semibold text-xs">View &rarr;</span>
