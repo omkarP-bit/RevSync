@@ -60,6 +60,13 @@ export default function AdminProductsPage() {
   const [inventory, setInventory] = useState<InventoryLocation[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(true);
 
+  // Restock modal
+  const [restockTarget, setRestockTarget] = useState<InventoryLocation | null>(null);
+  const [restockQty, setRestockQty] = useState<number>(0);
+  const [restockThreshold, setRestockThreshold] = useState<number>(5);
+  const [restockSaving, setRestockSaving] = useState(false);
+  const [restockError, setRestockError] = useState("");
+
   const fetchInventory = async () => {
     setInventoryLoading(true);
     try {
@@ -69,6 +76,33 @@ export default function AdminProductsPage() {
       console.error("Failed to load inventory locations", err);
     } finally {
       setInventoryLoading(false);
+    }
+  };
+
+  const openRestock = (inv: InventoryLocation) => {
+    setRestockTarget(inv);
+    setRestockQty(inv.quantity_on_hand);
+    setRestockThreshold(inv.reorder_threshold);
+    setRestockError("");
+  };
+
+  const handleRestock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!restockTarget) return;
+    setRestockSaving(true);
+    setRestockError("");
+    try {
+      await api.post<ApiResponse<InventoryLocation>>(`/api/v1/warehouses/${restockTarget.warehouse_id}/inventory`, {
+        product_id: restockTarget.product_id,
+        quantity_on_hand: restockQty,
+        reorder_threshold: restockThreshold,
+      });
+      setRestockTarget(null);
+      fetchInventory();
+    } catch (err: any) {
+      setRestockError(err.message || "Failed to update stock");
+    } finally {
+      setRestockSaving(false);
     }
   };
 
@@ -304,18 +338,19 @@ export default function AdminProductsPage() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Location Code</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Qty On Hand</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock Status</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Action</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200 text-sm">
               {inventoryLoading ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-4 text-center text-gray-500">
+                  <td colSpan={7} className="px-6 py-4 text-center text-gray-500">
                     Loading inventory locations...
                   </td>
                 </tr>
               ) : inventory.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-4 text-center text-gray-500">
+                  <td colSpan={7} className="px-6 py-4 text-center text-gray-500">
                     No inventory locations found.
                   </td>
                 </tr>
@@ -346,6 +381,14 @@ export default function AdminProductsPage() {
                             : "In Stock"}
                         </span>
                       </td>
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          onClick={() => openRestock(inv)}
+                          className="px-3 py-1 text-xs font-semibold rounded border border-blue-300 text-blue-700 hover:bg-blue-50 transition"
+                        >
+                          Restock
+                        </button>
+                      </td>
                     </tr>
                   );
                 })
@@ -354,6 +397,62 @@ export default function AdminProductsPage() {
           </table>
         </div>
       </div>
+
+      {/* Restock Modal */}
+      {restockTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full shadow-xl">
+            <h2 className="text-lg font-bold mb-1">Restock</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              <span className="font-semibold text-gray-900">{restockTarget.product_name}</span> at{" "}
+              {restockTarget.warehouse_name} ({restockTarget.warehouse_code})
+            </p>
+            <form onSubmit={handleRestock} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Quantity On Hand</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  required
+                  value={restockQty}
+                  onChange={(e) => setRestockQty(parseInt(e.target.value) || 0)}
+                  className="w-full border rounded px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Reorder Threshold</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={restockThreshold}
+                  onChange={(e) => setRestockThreshold(parseInt(e.target.value) || 0)}
+                  className="w-full border rounded px-3 py-2 text-sm"
+                />
+              </div>
+              {restockError && <div className="text-sm text-red-600">{restockError}</div>}
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setRestockTarget(null)}
+                  disabled={restockSaving}
+                  className="px-4 py-2 border border-gray-300 rounded text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={restockSaving}
+                  className="px-4 py-2 bg-blue-600 text-white rounded text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {restockSaving ? "Saving..." : "Save Stock"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal */}
       {showModal && (
