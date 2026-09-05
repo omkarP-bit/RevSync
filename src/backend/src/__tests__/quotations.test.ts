@@ -78,6 +78,7 @@ const mockLine = {
 const ctxRow = (overrides: Partial<typeof mockQuote> = {}) => ({
   id: 1,
   customer_id: 1,
+  sales_rep_id: 3,
   currency_code: "USD",
   tax_rate_pct: "10.00",
   status: "DRAFT",
@@ -358,6 +359,72 @@ describe("Quotations routes", () => {
       expect(res.status).toBe(409);
       expect(res.body.error.code).toBe("CONFLICT");
       expect(res.body.error.message).toContain("locked and cannot be modified");
+    });
+
+    it("returns 409 Conflict when attempting to cancel a CONFIRMED quotation", async () => {
+      vi.mocked(db.query).mockResolvedValueOnce(qr([ctxRow({ status: "CONFIRMED" })]));
+
+      const res = await request(app)
+        .post("/api/v1/quotations/1/cancel")
+        .set("Authorization", `Bearer ${repToken()}`);
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe("CONFLICT");
+    });
+  });
+
+  describe("POST /api/v1/quotations/:id/withdraw", () => {
+    it("withdraws a PENDING_APPROVAL quotation to DRAFT", async () => {
+      vi.mocked(db.query)
+        .mockResolvedValueOnce(qr([ctxRow({ status: "PENDING_APPROVAL", sales_rep_id: 3 })])) // fetch quote
+        .mockResolvedValueOnce(qr([{ id: 10 }])) // open approval query
+        .mockResolvedValueOnce(qr([])) // update approval status -> CANCELLED
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit log approval
+        .mockResolvedValueOnce(qr([])) // update quote status -> DRAFT
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit log quote
+        // ---- getFullQuotationPayload
+        .mockResolvedValueOnce(qr([{ ...mockQuote, status: "DRAFT" }]))
+        .mockResolvedValueOnce(qr([]))
+        .mockResolvedValueOnce(qr([]));
+
+      const res = await request(app)
+        .post("/api/v1/quotations/1/withdraw")
+        .set("Authorization", `Bearer ${repToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe("DRAFT");
+    });
+
+    it("rejects withdrawing a non-PENDING_APPROVAL quotation", async () => {
+      vi.mocked(db.query).mockResolvedValueOnce(qr([ctxRow({ status: "DRAFT", sales_rep_id: 3 })]));
+
+      const res = await request(app)
+        .post("/api/v1/quotations/1/withdraw")
+        .set("Authorization", `Bearer ${repToken()}`);
+
+      expect(res.status).toBe(422);
+    });
+  });
+
+  describe("POST /api/v1/quotations/:id/cancel", () => {
+    it("cancels an active quotation and updates status to CANCELLED without deleting data", async () => {
+      vi.mocked(db.query)
+        .mockResolvedValueOnce(qr([ctxRow({ status: "DRAFT" })])) // fetch quote
+        .mockResolvedValueOnce(qr([])) // open approval query (none)
+        .mockResolvedValueOnce(qr([])) // update status -> CANCELLED
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit log
+        // ---- getFullQuotationPayload
+        .mockResolvedValueOnce(qr([{ ...mockQuote, status: "CANCELLED" }]))
+        .mockResolvedValueOnce(qr([]))
+        .mockResolvedValueOnce(qr([]));
+
+      const res = await request(app)
+        .post("/api/v1/quotations/1/cancel")
+        .set("Authorization", `Bearer ${repToken()}`)
+        .send({ reason: "Customer changed mind" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe("CANCELLED");
     });
   });
 });

@@ -187,6 +187,10 @@ export default function QuotationDetailBuilderPage() {
   const [dismissedRecIds, setDismissedRecIds] = useState<number[]>([]);
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequest | null>(null);
 
+  // Cancel Modal State
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+
   useEffect(() => {
     try {
       const uStr = localStorage.getItem("user");
@@ -328,7 +332,7 @@ export default function QuotationDetailBuilderPage() {
     }
   }, [quoteId]);
 
-  const isLocked = quote?.status === "CONFIRMED";
+  const isLocked = quote?.status === "CONFIRMED" || quote?.status === "CANCELLED";
   const activePendingStep = approvalRequest?.steps?.find((s) => s.status === "PENDING");
   const isAuthorizedApprover =
     currentUser &&
@@ -510,6 +514,20 @@ export default function QuotationDetailBuilderPage() {
     }
   };
 
+  const handleCancelQuoteConfirm = async () => {
+    setCancelling(true);
+    try {
+      const res = await api.post<ApiResponse<QuotationDetail>>(`/api/v1/quotations/${quoteId}/cancel`);
+      setQuote(res.data);
+      setShowCancelModal(false);
+      showToast("Quotation cancelled successfully", "success");
+    } catch (err: any) {
+      showToast(err.message || "Failed to cancel quotation", "error");
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const openAddModalWithDefaults = () => {
     if (isLocked) return;
     setShowAddModal(true);
@@ -528,13 +546,12 @@ export default function QuotationDetailBuilderPage() {
       {/* Toast Notification Banner */}
       {toast && (
         <div
-          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg border text-xs font-bold transition flex items-center gap-2 ${
-            toast.type === "success"
+          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg border text-xs font-bold transition flex items-center gap-2 ${toast.type === "success"
               ? "bg-emerald-50 text-emerald-800 border-emerald-200"
               : toast.type === "error"
-              ? "bg-rose-50 text-rose-800 border-rose-200"
-              : "bg-blue-50 text-blue-800 border-blue-200"
-          }`}
+                ? "bg-rose-50 text-rose-800 border-rose-200"
+                : "bg-blue-50 text-blue-800 border-blue-200"
+            }`}
         >
           <span>{toast.type === "success" ? "✓" : toast.type === "error" ? "⚠️" : "ℹ️"}</span>
           <span>{toast.message}</span>
@@ -562,26 +579,25 @@ export default function QuotationDetailBuilderPage() {
       </div>
 
       {/* Dynamic Lifecycle Guidance Banner */}
-      <div className={`p-4 rounded-xl border text-xs font-semibold flex items-center justify-between shadow-xs ${
-        quote.status === "CONFIRMED"
+      <div className={`p-4 rounded-xl border text-xs font-semibold flex items-center justify-between shadow-xs ${quote.status === "CONFIRMED"
           ? "bg-slate-900 text-slate-100 border-slate-800"
           : quote.status === "APPROVED"
-          ? "bg-emerald-50 text-emerald-900 border-emerald-200"
-          : quote.status === "PENDING_APPROVAL"
-          ? "bg-amber-50 text-amber-900 border-amber-200"
-          : quote.status === "NEGOTIATION"
-          ? "bg-purple-50 text-purple-900 border-purple-200"
-          : quote.status === "REJECTED"
-          ? "bg-rose-50 text-rose-900 border-rose-200"
-          : "bg-blue-50 text-blue-900 border-blue-200"
-      }`}>
+            ? "bg-emerald-50 text-emerald-900 border-emerald-200"
+            : quote.status === "PENDING_APPROVAL"
+              ? "bg-amber-50 text-amber-900 border-amber-200"
+              : quote.status === "NEGOTIATION"
+                ? "bg-purple-50 text-purple-900 border-purple-200"
+                : quote.status === "REJECTED"
+                  ? "bg-rose-50 text-rose-900 border-rose-200"
+                  : "bg-blue-50 text-blue-900 border-blue-200"
+        }`}>
         <div className="flex items-center gap-2.5">
           <span className="text-base">
             {quote.status === "CONFIRMED" ? "🔒" : quote.status === "APPROVED" ? "✓" : quote.status === "PENDING_APPROVAL" ? "⏳" : quote.status === "NEGOTIATION" ? "💬" : quote.status === "REJECTED" ? "❌" : "📝"}
           </span>
           <div>
             <div className="font-extrabold text-sm">
-              {quote.status === "CONFIRMED" && "Confirmed — Quotation Locked"}
+              {quote.status === "CONFIRMED" && "Confirmed"}
               {quote.status === "APPROVED" && "Approved — Ready for Confirmation"}
               {quote.status === "PENDING_APPROVAL" && "Pending Approval Review"}
               {quote.status === "NEGOTIATION" && "Negotiation — Re-approval Required"}
@@ -692,13 +708,12 @@ export default function QuotationDetailBuilderPage() {
             <div className="flex items-center gap-2">
               <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400">Approval Workflow:</span>
               <span
-                className={`px-2 py-0.5 text-xs font-bold rounded ${
-                  approvalRequest.status === "APPROVED"
+                className={`px-2 py-0.5 text-xs font-bold rounded ${approvalRequest.status === "APPROVED"
                     ? "bg-emerald-500 text-white"
                     : approvalRequest.status === "REJECTED"
-                    ? "bg-rose-500 text-white"
-                    : "bg-amber-500 text-slate-900"
-                }`}
+                      ? "bg-rose-500 text-white"
+                      : "bg-amber-500 text-slate-900"
+                  }`}
               >
                 {approvalRequest.status}
               </span>
@@ -716,13 +731,12 @@ export default function QuotationDetailBuilderPage() {
                   <div className="text-[10px] text-slate-400">{step.decided_at ? new Date(step.decided_at).toLocaleDateString() : "Awaiting decision"}</div>
                 </div>
                 <span
-                  className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                    step.status === "APPROVED"
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded ${step.status === "APPROVED"
                       ? "bg-emerald-900 text-emerald-300"
                       : step.status === "REJECTED"
-                      ? "bg-rose-900 text-rose-300"
-                      : "bg-amber-900 text-amber-300"
-                  }`}
+                        ? "bg-rose-900 text-rose-300"
+                        : "bg-amber-900 text-amber-300"
+                    }`}
                 >
                   {step.status}
                 </span>
@@ -749,7 +763,7 @@ export default function QuotationDetailBuilderPage() {
         <table className="min-w-full divide-y divide-slate-200 text-xs">
           <thead className="bg-slate-100/70 text-slate-600 font-bold uppercase tracking-wider">
             <tr>
-<th className="px-4 py-3 text-left">Product & Variant</th>
+              <th className="px-4 py-3 text-left">Product & Variant</th>
               <th className="px-4 py-3 text-center w-24">Type</th>
               <th className="px-4 py-3 text-right">Unit Cost</th>
               <th className="px-4 py-3 text-center w-24">Qty</th>
@@ -764,7 +778,7 @@ export default function QuotationDetailBuilderPage() {
           <tbody className="divide-y divide-slate-200 bg-white">
             {(quote.lines || []).length === 0 ? (
               <tr>
-<td colSpan={10} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={10} className="px-4 py-8 text-center text-slate-400">
                   No line items added yet. Click &quot;+ Add Product Line&quot; to begin building this quotation.
                 </td>
               </tr>
@@ -790,7 +804,7 @@ export default function QuotationDetailBuilderPage() {
                       </div>
                     </td>
 
-{/* Unit Cost */}
+                    {/* Unit Cost */}
                     <td className="px-4 py-3 text-right text-slate-500 font-mono">
                       {quote.currency_code} {Number(line.unit_cost).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </td>
@@ -798,11 +812,10 @@ export default function QuotationDetailBuilderPage() {
                     {/* Qty Input */}
                     <td className="px-4 py-3 text-center">
                       <span
-                        className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                          line.product_type === "RECURRING"
+                        className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${line.product_type === "RECURRING"
                             ? "bg-indigo-100 text-indigo-800"
                             : "bg-slate-100 text-slate-700"
-                        }`}
+                          }`}
                       >
                         {line.product_type || "ONE_TIME"}
                       </span>
@@ -940,9 +953,8 @@ export default function QuotationDetailBuilderPage() {
                 <div>
                   <div className="flex items-center justify-between">
                     <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                        rec.relationship_type === "UPSELL" ? "bg-blue-600 text-white" : "bg-emerald-600 text-white"
-                      }`}
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded ${rec.relationship_type === "UPSELL" ? "bg-blue-600 text-white" : "bg-emerald-600 text-white"
+                        }`}
                     >
                       {rec.relationship_type}
                     </span>
@@ -1030,69 +1042,125 @@ export default function QuotationDetailBuilderPage() {
         <div className="flex items-center gap-3 shrink-0">
           {quote.status === "CONFIRMED" ? (
             <button disabled className="px-5 py-2.5 bg-slate-800 text-slate-300 rounded-lg text-xs font-bold shadow-xs cursor-not-allowed flex items-center gap-1.5">
-              <span>🔒</span> Confirmed — Locked
+              Confirmed
             </button>
-          ) : quote.status === "APPROVED" ? (
-            <button
-              onClick={() => handleStatusChange("CONFIRMED")}
-              className="px-5 py-2.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition shadow-xs flex items-center gap-1.5"
-            >
-              <span>✓</span> Confirm Quote
+          ) : quote.status === "CANCELLED" ? (
+            <button disabled className="px-5 py-2.5 bg-rose-100 text-rose-800 border border-rose-200 rounded-lg text-xs font-bold shadow-xs cursor-not-allowed flex items-center gap-1.5">
+              Cancelled
             </button>
-          ) : quote.status === "PENDING_APPROVAL" ? (
-            isAuthorizedApprover ? (
-              <>
-                <button
-                  onClick={handleReject}
-                  className="px-4 py-2.5 bg-rose-600 text-white rounded-lg text-xs font-bold hover:bg-rose-700 transition shadow-xs"
-                >
-                  Reject
-                </button>
-                <button
-                  onClick={handleApprove}
-                  className="px-5 py-2.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition shadow-xs flex items-center gap-1.5"
-                >
-                  <span>✓</span> Approve
-                </button>
-              </>
-            ) : (
-              <button disabled className="px-5 py-2.5 bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-xs font-bold shadow-xs cursor-not-allowed flex items-center gap-1.5">
-                <span>⏳</span> Waiting for Approval
-              </button>
-            )
-          ) : quote.status === "NEGOTIATION" ? (
-            <>
-              <button
-                onClick={() => handleStatusChange("DRAFT")}
-                className="px-4 py-2.5 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
-              >
-                Save Draft
-              </button>
-              <button
-                onClick={handleSubmitApproval}
-                className="px-5 py-2.5 bg-purple-600 text-white rounded-lg text-xs font-bold hover:bg-purple-700 transition shadow-xs"
-              >
-                Submit Changes for Approval
-              </button>
-            </>
           ) : (
             <>
+              {/* Primary Actions based on State */}
+              {quote.status === "APPROVED" ? (
+                <button
+                  onClick={() => handleStatusChange("CONFIRMED")}
+                  className="px-5 py-2.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition shadow-xs flex items-center gap-1.5"
+                >
+                  <span>✓</span> Confirm Quote
+                </button>
+              ) : quote.status === "PENDING_APPROVAL" ? (
+                isAuthorizedApprover ? (
+                  <>
+                    <button
+                      onClick={handleReject}
+                      className="px-4 py-2.5 bg-rose-600 text-white rounded-lg text-xs font-bold hover:bg-rose-700 transition shadow-xs"
+                    >
+                      Reject
+                    </button>
+                    <button
+                      onClick={handleApprove}
+                      className="px-5 py-2.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition shadow-xs flex items-center gap-1.5"
+                    >
+                      <span>✓</span> Approve
+                    </button>
+                  </>
+                ) : (
+                  <button disabled className="px-5 py-2.5 bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-xs font-bold shadow-xs cursor-not-allowed flex items-center gap-1.5">
+                    <span>⏳</span> Waiting for Approval
+                  </button>
+                )
+              ) : quote.status === "NEGOTIATION" ? (
+                <>
+                  <button
+                    onClick={() => handleStatusChange("DRAFT")}
+                    className="px-4 py-2.5 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                  >
+                    Save Draft
+                  </button>
+                  <button
+                    onClick={handleSubmitApproval}
+                    className="px-5 py-2.5 bg-purple-600 text-white rounded-lg text-xs font-bold hover:bg-purple-700 transition shadow-xs"
+                  >
+                    Submit Changes for Approval
+                  </button>
+                </>
+              ) : quote.status === "DRAFT" ? (
+                <>
+                  <button
+                    onClick={() => handleStatusChange("DRAFT")}
+                    className="px-4 py-2.5 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                  >
+                    Save Draft
+                  </button>
+                  <button
+                    onClick={handleSubmitApproval}
+                    className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition shadow-xs"
+                  >
+                    Submit for Approval
+                  </button>
+                </>
+              ) : (
+                /* REJECTED / Fallback */
+                <button
+                  onClick={handleSubmitApproval}
+                  className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition shadow-xs"
+                >
+                  Submit for Approval
+                </button>
+              )}
+
+              {/* Cancel Quote Action */}
               <button
-                onClick={() => handleStatusChange("DRAFT")}
-                className="px-4 py-2.5 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                onClick={() => setShowCancelModal(true)}
+                className="px-4 py-2.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold hover:bg-rose-100 transition shadow-xs"
               >
-                Save Draft
-              </button>
-              <button
-                onClick={handleSubmitApproval}
-                className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition shadow-xs"
-              >
-                Submit for Approval
+                Cancel Quote
               </button>
             </>
           )}
         </div>
       </div>
+
+      {/* Cancel Confirmation Modal */}
+      {showCancelModal && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl p-6 max-w-md w-full shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center gap-2.5 text-rose-600">
+              <span className="text-xl">⚠️</span>
+              <h2 className="text-lg font-extrabold text-slate-900">Cancel Quotation?</h2>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              This quotation will be marked as <strong>Cancelled</strong>. It will remain in database records and audit history, but cannot be modified or approved further.
+            </p>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                disabled={cancelling}
+                onClick={() => setShowCancelModal(false)}
+                className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+              >
+                Keep Quote
+              </button>
+              <button
+                disabled={cancelling}
+                onClick={handleCancelQuoteConfirm}
+                className="px-4 py-2 bg-rose-600 text-white rounded-lg text-xs font-bold hover:bg-rose-700 transition shadow-xs flex items-center gap-1.5"
+              >
+                {cancelling ? "Cancelling..." : "Cancel Quote"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Line Modal */}
       {!isLocked && showAddModal && (

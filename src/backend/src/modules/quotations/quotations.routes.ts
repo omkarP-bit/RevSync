@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { query, withTransaction } from "../../database/pool.js";
 import { authenticate, requireRole, ROLES } from "../../middleware/auth.js";
-import { NotFoundError, ValidationError, UnprocessableEntityError, ConflictError } from "../../shared/errors.js";
+import { NotFoundError, ValidationError, UnprocessableEntityError, ConflictError, ForbiddenError } from "../../shared/errors.js";
 import { writeAuditLog } from "../../shared/audit.js";
 
 function assertQuotationNotConfirmed(status: string): void {
@@ -710,6 +710,130 @@ quotationsRouter.post("/:id/recalculate", requireRole(ROLES.ADMIN, ROLES.SALES_R
     assertQuotationNotConfirmed(quote.status);
     await recalculateAndPersistQuotation(quote.id);
     const fullPayload = await getFullQuotationPayload(quote.id);
+    res.json({ data: fullPayload });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/v1/quotations/:id/withdraw (PENDING_APPROVAL -> DRAFT)
+quotationsRouter.post("/:id/withdraw", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const userId = (req as any).user.userId;
+    const userRole = Number((req as any).user.roleId);
+
+    const { quote } = await fetchQuoteContext(id);
+    const quoteId = quote.id;
+    const currentStatus = quote.status;
+
+    assertQuotationNotConfirmed(currentStatus);
+
+    if (currentStatus !== "PENDING_APPROVAL") {
+      throw new UnprocessableEntityError("Only PENDING_APPROVAL quotations can be withdrawn to DRAFT");
+    }
+
+    if (quote.sales_rep_id !== userId && userRole !== ROLES.ADMIN && userRole !== ROLES.SALES_MANAGER) {
+      throw new ForbiddenError("You are not authorized to withdraw this quotation approval request");
+    }
+
+    // Cancel open approval request if any
+    const openApproval = await query(
+      `SELECT id FROM approval_requests WHERE quotation_id = $1 AND status = 'PENDING_APPROVAL'`,
+      [quoteId]
+    );
+    for (const reqRow of openApproval.rows) {
+      await query(
+        `UPDATE approval_requests SET status = 'CANCELLED', decided_by = $2, decided_at = NOW(), notes = $3 WHERE id = $1`,
+        [reqRow.id, userId, "Approval withdrawn by user"]
+      );
+      await writeAuditLog({
+        entityType: "approval_requests",
+        entityId: reqRow.id,
+        action: "CANCELLED",
+        before: { status: "PENDING_APPROVAL" },
+        after: { status: "CANCELLED" },
+        performedBy: userId,
+        reason: "Approval withdrawn by user",
+      });
+    }
+
+    await query(`UPDATE quotations SET status = 'DRAFT', updated_at = NOW() WHERE id = $1`, [quoteId]);
+
+    await writeAuditLog({
+      entityType: "quotations",
+      entityId: quoteId,
+      action: "WITHDRAWN",
+      before: { status: "PENDING_APPROVAL" },
+      after: { status: "DRAFT" },
+      performedBy: userId,
+      reason: "Approval request withdrawn to DRAFT",
+    });
+
+    const fullPayload = await getFullQuotationPayload(quoteId);
+    res.json({ data: fullPayload });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const cancelSchema = z.object({
+  reason: z.string().optional(),
+});
+
+// POST /api/v1/quotations/:id/cancel
+quotationsRouter.post("/:id/cancel", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const userId = (req as any).user.userId;
+    const { reason } = cancelSchema.parse(req.body ?? {});
+
+    const { quote } = await fetchQuoteContext(id);
+    const quoteId = quote.id;
+    const currentStatus = quote.status;
+
+    if (currentStatus === "CONFIRMED") {
+      throw new ConflictError("Confirmed quotations are locked and cannot be cancelled");
+    }
+
+    if (currentStatus === "CANCELLED") {
+      throw new UnprocessableEntityError("Quotation is already cancelled");
+    }
+
+    // Invalidate open approval requests if any
+    const openApproval = await query(
+      `SELECT id FROM approval_requests WHERE quotation_id = $1 AND status = 'PENDING_APPROVAL'`,
+      [quoteId]
+    );
+    for (const reqRow of openApproval.rows) {
+      await query(
+        `UPDATE approval_requests SET status = 'CANCELLED', decided_by = $2, decided_at = NOW(), notes = $3 WHERE id = $1`,
+        [reqRow.id, userId, reason || "Quotation cancelled"]
+      );
+      await writeAuditLog({
+        entityType: "approval_requests",
+        entityId: reqRow.id,
+        action: "CANCELLED",
+        before: { status: "PENDING_APPROVAL" },
+        after: { status: "CANCELLED" },
+        performedBy: userId,
+        reason: reason || "Quotation cancelled",
+      });
+    }
+
+    await query(`UPDATE quotations SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1`, [quoteId]);
+
+    await writeAuditLog({
+      entityType: "quotations",
+      entityId: quoteId,
+      action: "CANCELLED",
+      before: { status: currentStatus },
+      after: { status: "CANCELLED" },
+      performedBy: userId,
+      reason: reason || "Quotation cancelled by user",
+    });
+
+    const fullPayload = await getFullQuotationPayload(quoteId);
     res.json({ data: fullPayload });
   } catch (err) {
     next(err);

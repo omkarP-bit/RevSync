@@ -127,6 +127,16 @@ export default function QuotationsListPage() {
     fetchQuotations();
   }, [page, selectedStatus, filterCustomerId, viewMode]);
 
+  // Toast Notification State
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
+  const showToast = (message: string, type: "success" | "error" | "info" = "info") => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  // Mutating quote id during drag drop
+  const [mutatingQuoteId, setMutatingQuoteId] = useState<number | null>(null);
+
   const handleOpenBuilderDirectly = async () => {
     const activeCustomerId = filterCustomerId > 0 ? filterCustomerId : 1;
     try {
@@ -137,8 +147,15 @@ export default function QuotationsListPage() {
       // Redirect directly to full Quotation Builder screen
       router.push(`/internal/quotations/${res.data.id}`);
     } catch (err: any) {
-      alert(err.message || "Failed to start new quotation");
+      showToast(err.message || "Failed to start new quotation", "error");
     }
+  };
+
+  const isValidTransition = (fromStatus: string, toStatus: string): boolean => {
+    if (fromStatus === toStatus) return false;
+    if (fromStatus === "DRAFT" && toStatus === "PENDING_APPROVAL") return true;
+    if (fromStatus === "PENDING_APPROVAL" && toStatus === "DRAFT") return true;
+    return false;
   };
 
   // Move Quote Status via Drag & Drop
@@ -146,29 +163,47 @@ export default function QuotationsListPage() {
     if (!draggedQuoteId) return;
 
     const currentQuote = quotations.find((q) => q.id === draggedQuoteId);
-    if (currentQuote && currentQuote.status === targetStatus) {
-      setDragOverCol(null);
+    setDragOverCol(null);
+
+    if (!currentQuote || currentQuote.status === targetStatus) {
       setDraggedQuoteId(null);
       return;
     }
 
-    setQuotations((prev) =>
-      prev.map((q) => (q.id === draggedQuoteId ? { ...q, status: targetStatus } : q))
-    );
+    if (!isValidTransition(currentQuote.status, targetStatus)) {
+      showToast(
+        `Cannot move quote directly from ${currentQuote.status} to ${targetStatus}. Please use action buttons on Detail screen.`,
+        "error"
+      );
+      setDraggedQuoteId(null);
+      return;
+    }
 
-    setDragOverCol(null);
+    setMutatingQuoteId(draggedQuoteId);
 
     try {
-      await api.patch(`/api/v1/quotations/${draggedQuoteId}`, { status: targetStatus });
-      fetchQuotations();
+      if (currentQuote.status === "DRAFT" && targetStatus === "PENDING_APPROVAL") {
+        const res = await api.post<ApiResponse<Quotation>>(`/api/v1/quotations/${draggedQuoteId}/submit`);
+        showToast(
+          `Quotation ${res.data.quotation_number || currentQuote.quotation_number} submitted for approval (Status: ${res.data.status})`,
+          "success"
+        );
+      } else if (currentQuote.status === "PENDING_APPROVAL" && targetStatus === "DRAFT") {
+        const res = await api.post<ApiResponse<Quotation>>(`/api/v1/quotations/${draggedQuoteId}/withdraw`);
+        showToast(
+          `Quotation ${res.data.quotation_number || currentQuote.quotation_number} withdrawn to Draft`,
+          "success"
+        );
+      }
+      await fetchQuotations();
     } catch (err: any) {
-      alert(err.message || "Failed to update quotation status");
-      fetchQuotations();
+      showToast(err.message || "Failed to update quotation status", "error");
+      await fetchQuotations();
     } finally {
+      setMutatingQuoteId(null);
       setDraggedQuoteId(null);
     }
   };
-
   const listStatuses = [
     { label: "All Statuses", value: "" },
     { label: "Draft", value: "DRAFT" },
@@ -303,6 +338,22 @@ export default function QuotationsListPage() {
         </div>
       </div>
 
+      {/* Floating Toast Notification */}
+      {toast && (
+        <div
+          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-xl text-xs font-bold flex items-center gap-2 border transition-all ${
+            toast.type === "success"
+              ? "bg-emerald-900 text-emerald-100 border-emerald-700"
+              : toast.type === "error"
+              ? "bg-rose-900 text-rose-100 border-rose-700"
+              : "bg-slate-900 text-slate-100 border-slate-700"
+          }`}
+        >
+          <span>{toast.type === "success" ? "✓" : toast.type === "error" ? "⚠️" : "ℹ️"}</span>
+          <span>{toast.message}</span>
+        </div>
+      )}
+
       {error && <div className="p-3 bg-red-50 text-red-700 border border-red-200 rounded-lg text-xs">{error}</div>}
 
       {/* VIEW 1: KANBAN BOARD */}
@@ -317,6 +368,19 @@ export default function QuotationsListPage() {
               );
               const colTotalSum = colQuotes.reduce((acc, q) => acc + Number(q?.grand_total || 0), 0);
               const isOver = dragOverCol === col.id;
+              const activeDraggedQuote = quotations.find((q) => q.id === draggedQuoteId);
+              const isValidDrop = activeDraggedQuote
+                ? isValidTransition(activeDraggedQuote.status, col.id)
+                : false;
+
+              let colBorderBg = "border-gray-200";
+              if (isOver) {
+                if (isValidDrop) {
+                  colBorderBg = "border-emerald-500 bg-emerald-50/60 ring-2 ring-emerald-400/60";
+                } else {
+                  colBorderBg = "border-rose-400 bg-rose-50/50 ring-2 ring-rose-300/50 cursor-not-allowed";
+                }
+              }
 
               return (
                 <div
@@ -332,8 +396,7 @@ export default function QuotationsListPage() {
                     e.preventDefault();
                     handleDrop(col.id);
                   }}
-                  className={`bg-gray-50/90 rounded-xl border border-t-4 ${col.borderTop} p-3 flex flex-col min-h-[550px] transition-all ${isOver ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-400/50" : "border-gray-200"
-                    }`}
+                  className={`bg-gray-50/90 rounded-xl border border-t-4 ${col.borderTop} p-3 flex flex-col min-h-[550px] transition-all ${colBorderBg}`}
                 >
                   {/* Column Header */}
                   <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-200">
@@ -354,29 +417,44 @@ export default function QuotationsListPage() {
                       <div className="text-center py-8 text-xs text-gray-400">Loading...</div>
                     ) : colQuotes.length === 0 ? (
                       <div className="text-center py-12 border border-dashed border-gray-200 rounded-lg text-xs text-gray-400">
-                        Drop quote here
+                        {isOver ? (isValidDrop ? "Drop here to update status" : "Invalid status move") : "No quotes"}
                       </div>
                     ) : (
-                      colQuotes.map((q) => (
-                        <div
-                          key={q.id}
-                          draggable
-                          onDragStart={(e) => {
-                            setDraggedQuoteId(q.id);
-                            e.dataTransfer.setData("text/plain", q.id.toString());
-                          }}
-                          onClick={() => router.push(`/internal/quotations/${q.id}`)}
-                          className="bg-white rounded-lg border border-gray-200 p-3 shadow-xs hover:shadow-md hover:border-blue-400 transition cursor-grab active:cursor-grabbing select-none group"
-                        >
-                          {/* Top Row: Quote ID */}
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="font-mono text-xs font-extrabold text-blue-600 group-hover:underline">
-                              {q.quotation_number}
-                            </span>
-                            <span className="text-[10px] font-mono text-gray-400 uppercase">
-                              {q.currency_code}
-                            </span>
-                          </div>
+                      colQuotes.map((q) => {
+                        const isMutatingThis = mutatingQuoteId === q.id;
+                        return (
+                          <div
+                            key={q.id}
+                            draggable={!isMutatingThis}
+                            onDragStart={(e) => {
+                              setDraggedQuoteId(q.id);
+                              e.dataTransfer.setData("text/plain", q.id.toString());
+                            }}
+                            onClick={() => router.push(`/internal/quotations/${q.id}`)}
+                            className={`bg-white rounded-lg border border-gray-200 p-3 shadow-xs hover:shadow-md hover:border-blue-400 transition cursor-grab active:cursor-grabbing select-none group relative ${
+                              isMutatingThis ? "opacity-60 pointer-events-none" : ""
+                            }`}
+                          >
+                            {isMutatingThis && (
+                              <div className="absolute inset-0 bg-white/70 rounded-lg flex items-center justify-center gap-1.5 text-xs font-bold text-blue-700 z-10">
+                                <span className="animate-spin inline-block">⏳</span> Updating status...
+                              </div>
+                            )}
+
+                            {/* Top Row: Quote ID */}
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="font-mono text-xs font-extrabold text-blue-600 group-hover:underline flex items-center gap-1">
+                                {q.quotation_number}
+                                {q.status === "REJECTED" && (
+                                  <span className="text-[9px] font-mono bg-rose-100 text-rose-800 px-1 py-0.2 rounded">
+                                    REJECTED
+                                  </span>
+                                )}
+                              </span>
+                              <span className="text-[10px] font-mono text-gray-400 uppercase">
+                                {q.currency_code}
+                              </span>
+                            </div>
 
                           {/* Customer Name */}
                           <div className="text-xs font-bold text-gray-900 truncate mb-2">
@@ -390,8 +468,9 @@ export default function QuotationsListPage() {
                               {q.currency_code} {Number(q.grand_total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
                           </div>
-                        </div>
-                      ))
+                          </div>
+                        );
+                      })
                     )}
                   </div>
                 </div>
