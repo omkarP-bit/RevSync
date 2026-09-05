@@ -1,9 +1,12 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { query, withTransaction } from "../../database/pool.js";
+import { query } from "../../database/pool.js";
 import { authenticate, requireRole, ROLES } from "../../middleware/auth.js";
-import { NotFoundError, ValidationError } from "../../shared/errors.js";
+import { NotFoundError, ValidationError, UnprocessableEntityError } from "../../shared/errors.js";
+import { writeAuditLog } from "../../shared/audit.js";
 import { calculateQuotation } from "../../engines/quotation-engine.js";
+import { evaluateDiscounts } from "../../engines/discount-engine.js";
 import { resolveUnitPrice } from "../../engines/pricing-engine.js";
+import { mapRiskLevel, selectRiskRule, buildSteps, RiskLevel } from "../../engines/approval-engine.js";
 import { z } from "zod";
 
 export const quotationsRouter = Router();
@@ -35,11 +38,14 @@ const patchLineSchema = z.object({
   description: z.string().optional(),
 });
 
-// Helper function to recalculate & persist a quotation inside a transaction or query
-async function recalculateAndPersistQuotation(quotationId: number | string): Promise<any> {
+const submitSchema = z.object({
+  notes: z.string().optional(),
+});
+
+async function fetchQuoteContext(quotationId: string | number): Promise<{ isNumeric: boolean; quote: any }> {
   const isNumeric = typeof quotationId === "number" || /^\d+$/.test(String(quotationId));
   const quoteResult = await query(
-    `SELECT q.id, q.customer_id, q.currency_code, q.tax_rate_pct, c.tier_id as customer_tier_id
+    `SELECT q.id, q.customer_id, q.currency_code, q.tax_rate_pct, q.status, c.tier_id as customer_tier_id
      FROM quotations q
      JOIN customers c ON q.customer_id = c.id
      WHERE ${isNumeric ? "q.id = $1" : "q.public_id::text = $1"}`,
@@ -50,18 +56,56 @@ async function recalculateAndPersistQuotation(quotationId: number | string): Pro
     throw new NotFoundError("Quotation", quotationId);
   }
 
-  const quote = quoteResult.rows[0];
+  return { isNumeric, quote: quoteResult.rows[0] };
+}
 
+async function fetchLinesWithCategories(quotationId: number | string): Promise<any[]> {
   const linesResult = await query(
-    `SELECT id, product_id, product_variant_id, description, quantity,
-            unit_price, unit_cost, applied_discount_pct
-     FROM quotation_lines
-     WHERE quotation_id = $1
-     ORDER BY id ASC`,
-    [quote.id]
+    `SELECT ql.id, ql.product_id, ql.product_variant_id, ql.description, ql.quantity,
+            ql.unit_price, ql.unit_cost, ql.applied_discount_pct, ql.line_subtotal,
+            p.category_id
+     FROM quotation_lines ql
+     JOIN products p ON ql.product_id = p.id
+     WHERE ql.quotation_id = $1
+     ORDER BY ql.id ASC`,
+    [quotationId]
   );
+  return linesResult.rows;
+}
 
-  const inputLines = linesResult.rows.map((row) => ({
+async function fetchDiscountRules(tierId: number | string): Promise<any[]> {
+  const result = await query(
+    `SELECT id, customer_tier_id, category_id, max_discount_pct, is_active
+     FROM discount_rules
+     WHERE customer_tier_id = $1 AND is_active = true`,
+    [tierId]
+  );
+  return result.rows;
+}
+
+async function fetchApprovalRules(): Promise<any[]> {
+  const result = await query(
+    `SELECT id, risk_level, min_total_overage, role_sequence, is_active
+     FROM approval_rules`
+  );
+  return result.rows;
+}
+
+// Recalculate and persist every monetary field on a quotation, including the
+// Phase 4 discount overage and risk-level columns, then return the fresh state.
+async function recalculateAndPersistQuotation(quotationId: string | number): Promise<{
+  header: any;
+  total_overage: number;
+  risk_level: RiskLevel;
+  riskRule: any;
+  discountEvaluation: ReturnType<typeof evaluateDiscounts>;
+}> {
+  const { quote } = await fetchQuoteContext(quotationId);
+  const linesResult = await fetchLinesWithCategories(quote.id);
+  const discountRules = await fetchDiscountRules(quote.customer_tier_id);
+  const approvalRules = await fetchApprovalRules();
+
+  const inputLines = linesResult.map((row) => ({
     id: Number(row.id),
     product_id: Number(row.product_id),
     product_variant_id: row.product_variant_id ? Number(row.product_variant_id) : null,
@@ -73,6 +117,36 @@ async function recalculateAndPersistQuotation(quotationId: number | string): Pro
   }));
 
   const calc = calculateQuotation(inputLines, Number(quote.tax_rate_pct));
+
+  const discountInputs = linesResult.map((row) => ({
+    id: Number(row.id),
+    product_id: Number(row.product_id),
+    category_id: Number(row.category_id),
+    line_subtotal: Number(row.line_subtotal),
+    applied_discount_pct: Number(row.applied_discount_pct),
+  }));
+  const discountEvaluation = evaluateDiscounts(
+    Number(quote.customer_tier_id),
+    discountRules.map((r) => ({
+      id: Number(r.id),
+      customer_tier_id: Number(r.customer_tier_id),
+      category_id: Number(r.category_id),
+      max_discount_pct: Number(r.max_discount_pct),
+      is_active: Boolean(r.is_active),
+    })),
+    discountInputs
+  );
+
+  const approvalRuleInputs = approvalRules.map((r) => ({
+    id: Number(r.id),
+    risk_level: r.risk_level as RiskLevel,
+    min_total_overage: Number(r.min_total_overage),
+    role_sequence: r.role_sequence.map(Number),
+    is_active: Boolean(r.is_active),
+  }));
+  const total_overage = discountEvaluation.total_overage;
+  const risk_level = mapRiskLevel(total_overage, approvalRuleInputs);
+  const riskRule = selectRiskRule(total_overage, approvalRuleInputs);
 
   // Update lines in DB
   for (const line of calc.lines) {
@@ -116,13 +190,153 @@ async function recalculateAndPersistQuotation(quotationId: number | string): Pro
       calc.total_cost,
       calc.margin_amount,
       calc.margin_pct,
-      calc.total_overage,
-      calc.risk_level,
+      total_overage,
+      risk_level,
       quote.id,
     ]
   );
 
-  return updateHeaderResult.rows[0];
+  return {
+    header: updateHeaderResult.rows[0],
+    total_overage,
+    risk_level,
+    riskRule,
+    discountEvaluation,
+  };
+}
+
+// Create an approval request and its ordered steps for a quotation.
+async function createApprovalRequest(ctx: {
+  quotationId: number | string;
+  risk_level: RiskLevel;
+  total_overage: number;
+  submittedBy: number;
+  notes?: string;
+  rule: any;
+}): Promise<any> {
+  const insertResult = await query(
+    `INSERT INTO approval_requests (quotation_id, status, risk_level, total_overage, submitted_by, notes)
+     VALUES ($1, 'PENDING_APPROVAL', $2, $3, $4, $5)
+     RETURNING *`,
+    [ctx.quotationId, ctx.risk_level, ctx.total_overage, ctx.submittedBy, ctx.notes ?? null]
+  );
+  const request = insertResult.rows[0];
+
+  const steps = buildSteps(ctx.rule);
+  for (const step of steps) {
+    await query(
+      `INSERT INTO approval_steps (approval_request_id, sequence, role_id)
+       VALUES ($1, $2, $3)`,
+      [request.id, step.sequence, step.role_id]
+    );
+  }
+
+  await writeAuditLog({
+    entityType: "approval_requests",
+    entityId: request.id,
+    action: "CREATED",
+    before: null,
+    after: {
+      quotation_id: Number(request.quotation_id),
+      risk_level: ctx.risk_level,
+      total_overage: ctx.total_overage,
+      role_sequence: steps.map((s) => s.role_id),
+    },
+    performedBy: ctx.submittedBy,
+    reason: ctx.notes || `Auto-created ${ctx.risk_level} risk approval`,
+  });
+
+  return request;
+}
+
+type RecalcResult = Awaited<ReturnType<typeof recalculateAndPersistQuotation>>;
+
+// When a discount-affected edit lands on a quotation that is under review,
+// supersede the open approval and re-issue one from the current risk.
+async function reopenApprovalAfterEdit(
+  quotationId: number | string,
+  userId: number,
+  refreshed: RecalcResult
+): Promise<void> {
+  const openResult = await query(
+    `SELECT id FROM approval_requests
+     WHERE quotation_id = $1 AND status = 'PENDING_APPROVAL'`,
+    [quotationId]
+  );
+
+  if (openResult.rows.length === 0) return;
+
+  for (const req of openResult.rows) {
+    await query(
+      `UPDATE approval_requests SET
+         status = 'CANCELLED', decided_by = $2, decided_at = NOW(),
+         notes = 'Quote modified after submission; approval superseded'
+       WHERE id = $1`,
+      [req.id, userId]
+    );
+    await writeAuditLog({
+      entityType: "approval_requests",
+      entityId: req.id,
+      action: "CANCELLED",
+      before: { status: "PENDING_APPROVAL" },
+      after: { status: "CANCELLED" },
+      performedBy: userId,
+      reason: "Quote modified after submission",
+    });
+  }
+
+  const { risk_level, total_overage, riskRule } = refreshed;
+
+  if (risk_level === "LOW") {
+    await query(`UPDATE quotations SET status = 'APPROVED', updated_at = NOW() WHERE id = $1`, [quotationId]);
+    await writeAuditLog({
+      entityType: "quotations",
+      entityId: quotationId,
+      action: "APPROVED",
+      before: { status: "PENDING_APPROVAL" },
+      after: { status: "APPROVED" },
+      performedBy: userId,
+      reason: "Overage dropped below approval threshold after edit",
+    });
+    return;
+  }
+
+  await createApprovalRequest({
+    quotationId,
+    risk_level,
+    total_overage,
+    submittedBy: userId,
+    notes: "Re-opened after quotation modification",
+    rule: riskRule,
+  });
+  await query(`UPDATE quotations SET status = 'PENDING_APPROVAL', updated_at = NOW() WHERE id = $1`, [quotationId]);
+  await writeAuditLog({
+    entityType: "quotations",
+    entityId: quotationId,
+    action: "REOPENED",
+    before: { status: "PENDING_APPROVAL" },
+    after: { status: "PENDING_APPROVAL" },
+    performedBy: userId,
+    reason: "Auto re-opened approval after discount edit",
+  });
+}
+
+function serializeHeader(row: any) {
+  return {
+    ...row,
+    id: Number(row.id),
+    customer_id: Number(row.customer_id),
+    sales_rep_id: Number(row.sales_rep_id),
+    subtotal: Number(row.subtotal),
+    discount_total: Number(row.discount_total),
+    tax_rate_pct: Number(row.tax_rate_pct),
+    tax_total: Number(row.tax_total),
+    grand_total: Number(row.grand_total),
+    total_cost: Number(row.total_cost),
+    margin_amount: Number(row.margin_amount),
+    margin_pct: Number(row.margin_pct),
+    total_overage: Number(row.total_overage),
+  };
 }
 
 // GET /api/v1/quotations
@@ -159,7 +373,7 @@ quotationsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_
               q.sales_rep_id, u.first_name || ' ' || u.last_name as sales_rep_name,
               q.currency_code, q.status, q.subtotal, q.discount_total, q.tax_rate_pct,
               q.tax_total, q.grand_total, q.margin_amount, q.margin_pct, q.risk_level,
-              q.created_at, q.updated_at
+              q.total_overage, q.created_at, q.updated_at
        FROM quotations q
        JOIN customers c ON q.customer_id = c.id
        JOIN users u ON q.sales_rep_id = u.id
@@ -170,19 +384,7 @@ quotationsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_
     );
 
     res.json({
-      data: result.rows.map((row) => ({
-        ...row,
-        id: Number(row.id),
-        customer_id: Number(row.customer_id),
-        sales_rep_id: Number(row.sales_rep_id),
-        subtotal: Number(row.subtotal),
-        discount_total: Number(row.discount_total),
-        tax_rate_pct: Number(row.tax_rate_pct),
-        tax_total: Number(row.tax_total),
-        grand_total: Number(row.grand_total),
-        margin_amount: Number(row.margin_amount),
-        margin_pct: Number(row.margin_pct),
-      })),
+      data: result.rows.map((row) => serializeHeader(row)),
       meta: { page, limit, total, total_pages: Math.ceil(total / limit) },
     });
   } catch (err) {
@@ -219,7 +421,7 @@ quotationsRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SAL
 
     const linesResult = await query(
       `SELECT ql.id, ql.quotation_id, ql.product_id, p.name as product_name, p.sku as product_sku,
-              ql.product_variant_id, pv.name as variant_name, ql.description, ql.quantity,
+              p.category_id, ql.product_variant_id, pv.name as variant_name, ql.description, ql.quantity,
               ql.unit_price, ql.unit_cost, ql.applied_discount_pct, ql.discount_amount,
               ql.line_subtotal, ql.line_total, ql.line_cost, ql.line_margin,
               ql.created_at, ql.updated_at
@@ -231,26 +433,48 @@ quotationsRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SAL
       [quote.id]
     );
 
+    const discountRules = await fetchDiscountRules(quote.customer_tier_id);
+    const discountEvaluation = evaluateDiscounts(
+      Number(quote.customer_tier_id),
+      discountRules.map((r) => ({
+        id: Number(r.id),
+        customer_tier_id: Number(r.customer_tier_id),
+        category_id: Number(r.category_id),
+        max_discount_pct: Number(r.max_discount_pct),
+        is_active: Boolean(r.is_active),
+      })),
+      linesResult.rows.map((l) => ({
+        id: Number(l.id),
+        product_id: Number(l.product_id),
+        category_id: Number(l.category_id),
+        line_subtotal: Number(l.line_subtotal),
+        applied_discount_pct: Number(l.applied_discount_pct),
+      }))
+    );
+
     res.json({
       data: {
-        ...quote,
-        id: Number(quote.id),
-        customer_id: Number(quote.customer_id),
-        sales_rep_id: Number(quote.sales_rep_id),
-        subtotal: Number(quote.subtotal),
-        discount_total: Number(quote.discount_total),
-        tax_rate_pct: Number(quote.tax_rate_pct),
-        tax_total: Number(quote.tax_total),
-        grand_total: Number(quote.grand_total),
-        total_cost: Number(quote.total_cost),
-        margin_amount: Number(quote.margin_amount),
-        margin_pct: Number(quote.margin_pct),
-        total_overage: Number(quote.total_overage),
+        ...serializeHeader(quote),
+        discount_analysis: {
+          ...discountEvaluation,
+          lines: discountEvaluation.lines.map((l) => ({
+            id: l.id ?? null,
+            product_id: l.product_id,
+            product_name: linesResult.rows.find((r) => Number(r.id) === Number(l.id))?.product_name ?? null,
+            category_id: l.category_id,
+            applied_discount_pct: l.applied_discount_pct,
+            allowed_discount_pct: l.allowed_discount_pct,
+            line_overage: l.line_overage,
+            is_flagged: l.is_flagged,
+            reason: l.reason,
+          })),
+        },
         lines: linesResult.rows.map((l) => ({
           ...l,
           id: Number(l.id),
           quotation_id: Number(l.quotation_id),
           product_id: Number(l.product_id),
+          category_id: Number(l.category_id),
           product_variant_id: l.product_variant_id ? Number(l.product_variant_id) : null,
           quantity: Number(l.quantity),
           unit_price: Number(l.unit_price),
@@ -300,20 +524,20 @@ quotationsRouter.post("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES
       [quotationNumber, data.customer_id, userId, customer.currency_code, data.tax_rate_pct, data.notes || null]
     );
 
+    await writeAuditLog({
+      entityType: "quotations",
+      entityId: insertResult.rows[0].id,
+      action: "CREATED",
+      before: null,
+      after: { quotation_number: quotationNumber, customer_id: data.customer_id, status: "DRAFT" },
+      performedBy: userId,
+      reason: "Quotation created",
+    });
+
     const row = insertResult.rows[0];
     res.status(201).json({
       data: {
-        ...row,
-        id: Number(row.id),
-        customer_id: Number(row.customer_id),
-        sales_rep_id: Number(row.sales_rep_id),
-        subtotal: Number(row.subtotal),
-        discount_total: Number(row.discount_total),
-        tax_rate_pct: Number(row.tax_rate_pct),
-        tax_total: Number(row.tax_total),
-        grand_total: Number(row.grand_total),
-        margin_amount: Number(row.margin_amount),
-        margin_pct: Number(row.margin_pct),
+        ...serializeHeader(row),
         lines: [],
       },
     });
@@ -326,28 +550,141 @@ quotationsRouter.post("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES
 quotationsRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const isNumeric = /^\d+$/.test(id);
+    const userId = (req as any).user.userId;
     const fields = patchQuotationSchema.parse(req.body);
 
-    const check = await query(`SELECT id FROM quotations WHERE ${isNumeric ? "id = $1" : "public_id::text = $1"}`, [id]);
-    if (check.rows.length === 0) {
-      throw new NotFoundError("Quotation", id);
-    }
-    const realId = check.rows[0].id;
+    const { quote } = await fetchQuoteContext(id);
+    const realId = quote.id;
 
-    const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
+    if (fields.status) {
+      const targetStatus = fields.status;
+      const forbiddenDirect = ["PENDING_APPROVAL", "APPROVED", "REJECTED"];
+      if (forbiddenDirect.includes(targetStatus)) {
+        throw new UnprocessableEntityError(
+          `'${targetStatus}' must be reached through the submit/approval workflow`
+        );
+      }
+
+      if (targetStatus === "CONFIRMED") {
+        if (quote.status !== "APPROVED") {
+          throw new UnprocessableEntityError("Only APPROVED quotations can be confirmed");
+        }
+        const openApproval = await query(
+          `SELECT id FROM approval_requests WHERE quotation_id = $1 AND status = 'PENDING_APPROVAL'`,
+          [realId]
+        );
+        if (openApproval.rows.length > 0) {
+          throw new UnprocessableEntityError("Approval is still pending for this quotation");
+        }
+      }
+
+      if ((targetStatus === "DRAFT" || targetStatus === "NEGOTIATION") && quote.status === "PENDING_APPROVAL") {
+        const openApproval = await query(
+          `SELECT id FROM approval_requests WHERE quotation_id = $1 AND status = 'PENDING_APPROVAL'`,
+          [realId]
+        );
+        for (const req of openApproval.rows) {
+          await query(
+            `UPDATE approval_requests SET
+               status = 'CANCELLED', decided_by = $2, decided_at = NOW(),
+               notes = 'Retracted by creator'
+             WHERE id = $1`,
+            [req.id, userId]
+          );
+          await writeAuditLog({
+            entityType: "approval_requests",
+            entityId: req.id,
+            action: "CANCELLED",
+            before: { status: "PENDING_APPROVAL" },
+            after: { status: "CANCELLED" },
+            performedBy: userId,
+            reason: "Quotation retracted from approval",
+          });
+        }
+      }
+
+      await query(
+        `UPDATE quotations SET status = $1, updated_at = NOW() WHERE id = $2`,
+        [targetStatus, realId]
+      );
+      await writeAuditLog({
+        entityType: "quotations",
+        entityId: realId,
+        action: targetStatus,
+        before: { status: quote.status },
+        after: { status: targetStatus },
+        performedBy: userId,
+        reason: "Manual status update",
+      });
+    }
+
+    const entries = Object.entries(fields).filter(([k, v]) => v !== undefined && k !== "status");
     if (entries.length > 0) {
       const setClauses = entries.map(([k], i) => `${k} = $${i + 1}`);
       const values = entries.map(([, v]) => v);
-
       await query(
         `UPDATE quotations SET ${setClauses.join(", ")}, updated_at = NOW() WHERE id = $${entries.length + 1}`,
         [...values, realId]
       );
     }
 
-    const updated = await recalculateAndPersistQuotation(realId);
-    res.json({ data: updated });
+    const refreshed = await recalculateAndPersistQuotation(realId);
+    res.json({ data: serializeHeader(refreshed.header) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/v1/quotations/:id/submit
+quotationsRouter.post("/:id/submit", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const userId = (req as any).user.userId;
+    const { notes } = submitSchema.parse(req.body ?? {});
+
+    const refreshed = await recalculateAndPersistQuotation(id);
+    const { header, total_overage, risk_level, riskRule } = refreshed;
+    const quoteId = header.id;
+    const currentStatus = header.status;
+
+    if (currentStatus !== "DRAFT" && currentStatus !== "NEGOTIATION") {
+      throw new UnprocessableEntityError("Only DRAFT or NEGOTIATION quotations can be submitted for approval");
+    }
+
+    if (risk_level === "LOW") {
+      await query(`UPDATE quotations SET status = 'APPROVED', updated_at = NOW() WHERE id = $1`, [quoteId]);
+      await writeAuditLog({
+        entityType: "quotations",
+        entityId: quoteId,
+        action: "APPROVED",
+        before: { status: currentStatus },
+        after: { status: "APPROVED", total_overage, risk_level },
+        performedBy: userId,
+        reason: notes || "No approval required (LOW risk)",
+      });
+    } else {
+      await createApprovalRequest({
+        quotationId: quoteId,
+        risk_level,
+        total_overage,
+        submittedBy: userId,
+        notes,
+        rule: riskRule,
+      });
+      await query(`UPDATE quotations SET status = 'PENDING_APPROVAL', updated_at = NOW() WHERE id = $1`, [quoteId]);
+      await writeAuditLog({
+        entityType: "quotations",
+        entityId: quoteId,
+        action: "SUBMITTED",
+        before: { status: currentStatus },
+        after: { status: "PENDING_APPROVAL", total_overage, risk_level },
+        performedBy: userId,
+        reason: notes || "Submitted for approval",
+      });
+    }
+
+    const finalResult = await query(`SELECT * FROM quotations WHERE id = $1`, [quoteId]);
+    res.json({ data: serializeHeader(finalResult.rows[0]) });
   } catch (err) {
     next(err);
   }
@@ -357,6 +694,7 @@ quotationsRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.S
 quotationsRouter.post("/:id/lines", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
+    const userId = (req as any).user.userId;
     const isNumeric = /^\d+$/.test(id);
     const data = addLineSchema.parse(req.body);
 
@@ -420,12 +758,13 @@ quotationsRouter.post("/:id/lines", requireRole(ROLES.ADMIN, ROLES.SALES_REP, RO
     const lineCost = qty * unitCost;
     const lineMargin = lineTotal - lineCost;
 
-    await query(
+    const insertResult = await query(
       `INSERT INTO quotation_lines
          (quotation_id, product_id, product_variant_id, description, quantity,
           unit_price, unit_cost, applied_discount_pct, discount_amount,
           line_subtotal, line_total, line_cost, line_margin)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       RETURNING id`,
       [
         quote.id,
         data.product_id,
@@ -443,8 +782,21 @@ quotationsRouter.post("/:id/lines", requireRole(ROLES.ADMIN, ROLES.SALES_REP, RO
       ]
     );
 
-    const updatedQuote = await recalculateAndPersistQuotation(quote.id);
-    res.status(201).json({ data: updatedQuote });
+    await writeAuditLog({
+      entityType: "quotation_lines",
+      entityId: insertResult.rows[0].id,
+      action: "LINE_ADDED",
+      before: null,
+      after: { product_id: data.product_id, quantity: qty, applied_discount_pct: discPct },
+      performedBy: userId,
+      reason: "Line added",
+    });
+
+    const refreshed = await recalculateAndPersistQuotation(quote.id);
+    if (refreshed.header.status === "PENDING_APPROVAL") {
+      await reopenApprovalAfterEdit(quote.id, userId, refreshed);
+    }
+    res.status(201).json({ data: serializeHeader(refreshed.header) });
   } catch (err) {
     next(err);
   }
@@ -454,6 +806,7 @@ quotationsRouter.post("/:id/lines", requireRole(ROLES.ADMIN, ROLES.SALES_REP, RO
 quotationsRouter.patch("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id, lineId } = req.params;
+    const userId = (req as any).user.userId;
     const fields = patchLineSchema.parse(req.body);
 
     const lineCheck = await query(
@@ -476,8 +829,21 @@ quotationsRouter.patch("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SALE
       );
     }
 
-    const updatedQuote = await recalculateAndPersistQuotation(id);
-    res.json({ data: updatedQuote });
+    await writeAuditLog({
+      entityType: "quotation_lines",
+      entityId: lineId,
+      action: "LINE_UPDATED",
+      before: null,
+      after: fields,
+      performedBy: userId,
+      reason: "Line updated",
+    });
+
+    const refreshed = await recalculateAndPersistQuotation(id);
+    if (refreshed.header.status === "PENDING_APPROVAL") {
+      await reopenApprovalAfterEdit(id, userId, refreshed);
+    }
+    res.json({ data: serializeHeader(refreshed.header) });
   } catch (err) {
     next(err);
   }
@@ -487,6 +853,7 @@ quotationsRouter.patch("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SALE
 quotationsRouter.delete("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id, lineId } = req.params;
+    const userId = (req as any).user.userId;
 
     const result = await query(
       `DELETE FROM quotation_lines WHERE id = $1 AND quotation_id = $2 RETURNING id`,
@@ -497,8 +864,21 @@ quotationsRouter.delete("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SAL
       throw new NotFoundError("QuotationLine", lineId);
     }
 
-    const updatedQuote = await recalculateAndPersistQuotation(id);
-    res.json({ data: updatedQuote });
+    await writeAuditLog({
+      entityType: "quotation_lines",
+      entityId: lineId,
+      action: "LINE_DELETED",
+      before: null,
+      after: null,
+      performedBy: userId,
+      reason: "Line removed",
+    });
+
+    const refreshed = await recalculateAndPersistQuotation(id);
+    if (refreshed.header.status === "PENDING_APPROVAL") {
+      await reopenApprovalAfterEdit(id, userId, refreshed);
+    }
+    res.json({ data: serializeHeader(refreshed.header) });
   } catch (err) {
     next(err);
   }
@@ -508,8 +888,8 @@ quotationsRouter.delete("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SAL
 quotationsRouter.post("/:id/recalculate", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const updatedQuote = await recalculateAndPersistQuotation(id);
-    res.json({ data: updatedQuote });
+    const refreshed = await recalculateAndPersistQuotation(id);
+    res.json({ data: serializeHeader(refreshed.header) });
   } catch (err) {
     next(err);
   }
