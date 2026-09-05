@@ -1,6 +1,11 @@
 import pg from "pg";
 import { loadConfig } from "../config.js";
 
+// node-postgres returns BIGINT (int8) columns as strings to avoid precision loss.
+// All identifiers in this schema fit safely in a JS number, so normalize them
+// so downstream code and the API always see consistent numeric id/role types.
+pg.types.setTypeParser(20, (val: string) => parseInt(val, 10));
+
 let _pool: pg.Pool | null = null;
 
 export function getPool(): pg.Pool {
