@@ -289,7 +289,11 @@ describe("Quotations routes", () => {
         .mockResolvedValueOnce(qr([])) // step 2
         .mockResolvedValueOnce(qr([{ id: 1 }])) // audit CREATED
         .mockResolvedValueOnce(qr([])) // status -> PENDING_APPROVAL
-        .mockResolvedValueOnce(qr([{ id: 1 }])); // audit REOPENED
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit REOPENED
+        // ---- getFullQuotationPayload
+        .mockResolvedValueOnce(qr([{ ...mockQuote, status: "PENDING_APPROVAL", risk_level: "HIGH", total_overage: "8.0000" }])) // quote
+        .mockResolvedValueOnce(qr([])) // lines
+        .mockResolvedValueOnce(qr([])); // discount rules
 
       const res = await request(app)
         .post("/api/v1/quotations/1/lines")
@@ -297,8 +301,48 @@ describe("Quotations routes", () => {
         .send({ product_id: 6, quantity: 2, applied_discount_pct: 0 });
 
       expect(res.status).toBe(201);
+      // Re-open stays on PENDING_APPROVAL because the overage stayed HIGH.
       expect(res.body.data.risk_level).toBe("HIGH");
-      expect(db.query).toHaveBeenCalledTimes(21);
+      expect(res.body.data.status).toBe("PENDING_APPROVAL");
+      expect(db.query).toHaveBeenCalledTimes(24);
+    });
+
+    it("auto-approves when an edit drops the risk to LOW", async () => {
+      vi.mocked(db.query)
+        .mockResolvedValueOnce(qr([{ id: 1, currency_code: "USD", customer_tier_id: 1 }])) // quote
+        .mockResolvedValueOnce(qr([{ id: 6, name: "Hardware", base_cost: "50.0000" }])) // product
+        .mockResolvedValueOnce(qr([])) // price list
+        .mockResolvedValueOnce(qr([{ id: 12 }])) // insert line
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit LINE_ADDED
+        // ---- recalculateAndPersistQuotation (single line, low discount)
+        .mockResolvedValueOnce(qr([ctxRow({ status: "PENDING_APPROVAL" })])) // quote context
+        .mockResolvedValueOnce(qr([
+          { id: 12, product_id: 6, category_id: 1, quantity: 1, unit_price: "65.0000", unit_cost: "50.0000", applied_discount_pct: "2.00", line_subtotal: "65.0000" },
+        ])) // lines
+        .mockResolvedValueOnce(qr([discountRule])) // discount rules
+        .mockResolvedValueOnce(qr([mediumRule, highRule])) // approval rules
+        .mockResolvedValueOnce(qr([])) // line update
+        .mockResolvedValueOnce(qr([{ ...mockQuote, status: "PENDING_APPROVAL", risk_level: "LOW", total_overage: "2.0000" }])) // header update
+        // ---- reopenApprovalAfterEdit: cancel open request, risk LOW -> approve
+        .mockResolvedValueOnce(qr([{ id: 5 }])) // open approval
+        .mockResolvedValueOnce(qr([])) // cancel request
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit CANCELLED
+        .mockResolvedValueOnce(qr([])) // status -> APPROVED
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit APPROVED
+        // ---- getFullQuotationPayload
+        .mockResolvedValueOnce(qr([{ ...mockQuote, status: "APPROVED", risk_level: "LOW", total_overage: "2.0000" }])) // quote
+        .mockResolvedValueOnce(qr([])) // lines
+        .mockResolvedValueOnce(qr([])); // discount rules
+
+      const res = await request(app)
+        .post("/api/v1/quotations/1/lines")
+        .set("Authorization", `Bearer ${repToken()}`)
+        .send({ product_id: 6, quantity: 1, applied_discount_pct: 2 });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.risk_level).toBe("LOW");
+      expect(res.body.data.status).toBe("APPROVED");
+      expect(db.query).toHaveBeenCalledTimes(19);
     });
   });
 });

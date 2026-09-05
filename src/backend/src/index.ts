@@ -19,6 +19,7 @@ import { pricingRouter } from "./modules/pricing/pricing.routes.js";
 import { quotationsRouter } from "./modules/quotations/quotations.routes.js";
 import { discountsRouter } from "./modules/discounts/discounts.routes.js";
 import { approvalsRouter } from "./modules/approvals/approvals.routes.js";
+import { warehousesRouter, fulfillmentRouter } from "./modules/fulfillment/fulfillment.routes.js";
 
 async function main() {
   const config = loadConfig();
@@ -52,6 +53,8 @@ async function main() {
   app.use("/api/v1/quotations", quotationsRouter);
   app.use("/api/v1/discounts", discountsRouter);
   app.use("/api/v1/approvals", approvalsRouter);
+  app.use("/api/v1/warehouses", warehousesRouter);
+  app.use("/api/v1/fulfillment", fulfillmentRouter);
 
   app.use(errorHandler);
 

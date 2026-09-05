@@ -177,13 +177,28 @@ describe("Customers routes", () => {
 
   describe("PATCH /:id", () => {
     it("should update a customer", async () => {
-      vi.mocked(db.query).mockResolvedValueOnce({
-        rows: [{ ...mockCustomer, name: "Updated Corp" }],
-        rowCount: 1,
-        command: "",
-        oid: 0,
-        fields: [],
-      });
+      vi.mocked(db.query)
+        .mockResolvedValueOnce({
+          rows: [mockCustomer],
+          rowCount: 1,
+          command: "",
+          oid: 0,
+          fields: [],
+        })
+        .mockResolvedValueOnce({
+          rows: [{ ...mockCustomer, name: "Updated Corp" }],
+          rowCount: 1,
+          command: "",
+          oid: 0,
+          fields: [],
+        })
+        .mockResolvedValueOnce({
+          rows: [{ id: 1 }],
+          rowCount: 1,
+          command: "",
+          oid: 0,
+          fields: [],
+        });
 
       const res = await request(app)
         .patch("/api/v1/customers/1")

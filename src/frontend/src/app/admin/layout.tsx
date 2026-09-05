@@ -13,6 +13,7 @@ const adminLinks = [
   { label: "Currencies", href: "/admin/currencies" },
   { label: "Discount Rules", href: "/admin/discount-rules" },
   { label: "Approval Rules", href: "/admin/approval-rules" },
+  { label: "Warehouses", href: "/admin/warehouses" },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
