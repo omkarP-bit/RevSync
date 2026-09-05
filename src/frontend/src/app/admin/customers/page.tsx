@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
 import { CustomerFormModal, Customer as ModalCustomer } from "@/components/CustomerFormModal";
+import { PortalSetupModal } from "@/components/PortalSetupModal";
 
 interface Customer {
   id: number;
@@ -22,6 +23,7 @@ interface Customer {
   payment_terms: string;
   upfront_payment_pct: string;
   created_at: string;
+  is_password_set?: boolean;
 }
 
 interface TierEvaluation {
@@ -66,6 +68,9 @@ export default function CustomersPage() {
   const [overrideTier, setOverrideTier] = useState("GOLD");
   const [overrideReason, setOverrideReason] = useState("");
   const [showCreateModal, setShowCreateModal] = useState(false);
+
+  // Portal Setup Modal State
+  const [setupModalCustomer, setSetupModalCustomer] = useState<Customer | null>(null);
 
   const fetchCustomers = async (page = 1) => {
     setLoading(true);
@@ -183,6 +188,15 @@ export default function CustomersPage() {
         onSuccess={handleCreateSuccess}
       />
 
+      {setupModalCustomer && (
+        <PortalSetupModal
+          isOpen={Boolean(setupModalCustomer)}
+          onClose={() => setSetupModalCustomer(null)}
+          customer={setupModalCustomer}
+          onCustomerUpdated={() => fetchCustomers(meta.page)}
+        />
+      )}
+
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold">Customers Directory</h1>
         <button
@@ -207,10 +221,9 @@ export default function CustomersPage() {
                 <tr className="border-b text-left text-sm text-gray-500">
                   <th className="p-3">Name</th>
                   <th className="p-3">Email</th>
+                  <th className="p-3">Portal Account</th>
                   <th className="p-3">Effective Tier</th>
                   <th className="p-3">Calculated Tier</th>
-                  <th className="p-3">Type</th>
-                  <th className="p-3">Expected PO</th>
                   <th className="p-3">Payment Terms</th>
                   <th className="p-3">Status</th>
                   <th className="p-3 text-right">Actions</th>
@@ -222,16 +235,31 @@ export default function CustomersPage() {
                     <td className="p-3 font-medium">{c.name}</td>
                     <td className="p-3 text-gray-600">{c.email}</td>
                     <td className="p-3">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                          c.is_password_set
+                            ? "bg-emerald-100 text-emerald-800"
+                            : "bg-amber-100 text-amber-800"
+                        }`}
+                      >
+                        {c.is_password_set ? "Active" : "Pending Setup"}
+                      </span>
+                    </td>
+                    <td className="p-3">
                       <span className={`px-2 py-1 rounded text-xs font-bold ${c.override_tier_name ? "bg-amber-100 text-amber-800 border border-amber-300" : "bg-blue-100 text-blue-700"}`}>
                         {c.tier_name} {c.override_tier_name ? "(Override)" : ""}
                       </span>
                     </td>
                     <td className="p-3 text-xs text-gray-500">{c.calculated_tier_name || c.tier_name}</td>
-                    <td className="p-3 text-sm text-gray-600">{c.customer_type}</td>
-                    <td className="p-3 text-sm text-gray-600">{Number(c.expected_po_value).toLocaleString()}</td>
                     <td className="p-3 text-sm text-gray-600"><PaymentLabel value={c.payment_terms} /></td>
                     <td className="p-3"><span className={`px-2 py-1 rounded text-xs ${c.status === "ACTIVE" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-700"}`}>{c.status}</span></td>
                     <td className="p-3 text-right flex items-center justify-end gap-3">
+                      <button
+                        onClick={() => setSetupModalCustomer(c)}
+                        className="text-indigo-600 hover:text-indigo-900 font-semibold text-xs flex items-center gap-1"
+                      >
+                        🔑 Setup Link
+                      </button>
                       <button
                         onClick={() => evaluate(c)}
                         className="text-purple-600 hover:text-purple-800 font-semibold text-xs"
@@ -242,13 +270,13 @@ export default function CustomersPage() {
                         href={`/internal/quotations?customer_id=${c.id}`}
                         className="text-blue-600 hover:text-blue-900 font-semibold text-xs hover:underline"
                       >
-                        View Quotes &rarr;
+                        Quotes &rarr;
                       </Link>
                     </td>
                   </tr>
                 ))}
                 {customers.length === 0 && (
-                  <tr><td colSpan={9} className="p-6 text-center text-gray-400">No customers found</td></tr>
+                  <tr><td colSpan={8} className="p-6 text-center text-gray-400">No customers found</td></tr>
                 )}
               </tbody>
             </table>

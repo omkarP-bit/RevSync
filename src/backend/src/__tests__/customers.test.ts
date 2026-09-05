@@ -396,4 +396,27 @@ describe("Customers routes", () => {
       expect(res.status).toBe(200);
     });
   });
+
+  describe("POST /api/v1/customers/:id/generate-setup-token", () => {
+    it("should require authentication", async () => {
+      const res = await request(app).post("/api/v1/customers/1/generate-setup-token");
+      expect(res.status).toBe(401);
+    });
+
+    it("should generate a single-use setup token for authorized internal user", async () => {
+      vi.mocked(db.query)
+        .mockResolvedValueOnce({ rows: [mockCustomer], rowCount: 1, command: "", oid: 0, fields: [] }) // getCustomerOrThrow
+        .mockResolvedValueOnce({ rows: [], rowCount: 1, command: "", oid: 0, fields: [] }) // UPDATE customers
+        .mockResolvedValueOnce({ rows: [], rowCount: 1, command: "", oid: 0, fields: [] }); // audit log
+
+      const res = await request(app)
+        .post("/api/v1/customers/1/generate-setup-token")
+        .set("Authorization", `Bearer ${adminToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveProperty("setup_token");
+      expect(res.body.data).toHaveProperty("expires_at");
+      expect(res.body.data.email).toBe("acme@test.com");
+    });
+  });
 });

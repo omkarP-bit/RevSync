@@ -4,6 +4,8 @@ import { authenticate, requireRole, ROLES } from "../../middleware/auth.js";
 import { NotFoundError, ValidationError, ConflictError, ForbiddenError } from "../../shared/errors.js";
 import { writeAuditLog } from "../../shared/audit.js";
 import { z } from "zod";
+import crypto from "crypto";
+import { v4 as uuidv4 } from "uuid";
 import {
   evaluateCustomerTier,
   CustomerTierRule,
@@ -36,6 +38,7 @@ const customerSchema = z.object({
 
 const CUSTOMER_SELECT = `
   SELECT c.id, c.name, c.email, c.company, c.phone, c.status, c.currency_code,
+         (c.password_hash IS NOT NULL) as is_password_set,
          c.tier_id, ct_eff.name as tier_name,
          c.calculated_tier_id, ct_calc.name as calculated_tier_name,
          c.tier_override_id, ct_over.name as override_tier_name,
@@ -319,12 +322,17 @@ customersRouter.post("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_
       overrideReason = req.body.tier_override_reason || "Manager override at customer creation";
     }
 
+    const setupToken = uuidv4();
+    const setupTokenHash = crypto.createHash("sha256").update(setupToken).digest("hex");
+    const setupTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
     const insertRes = await query(
       `INSERT INTO customers (name, email, company, phone, tier_id, calculated_tier_id,
                               tier_override_id, tier_override_by, tier_override_at, tier_override_reason,
                               status, currency_code, customer_type, expected_po_value, payment_terms,
-                              upfront_payment_pct, credit_limit, billing_address, shipping_address)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                              upfront_payment_pct, credit_limit, billing_address, shipping_address,
+                              setup_token_hash, setup_token_expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
        RETURNING id`,
       [
         data.name,
@@ -346,6 +354,8 @@ customersRouter.post("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_
         isSalesRep ? 0 : data.credit_limit,
         data.billing_address ?? null,
         data.shipping_address ?? null,
+        setupTokenHash,
+        setupTokenExpiresAt,
       ]
     );
 
@@ -361,7 +371,7 @@ customersRouter.post("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_
     await query(
       `INSERT INTO customer_tier_evaluations
          (customer_id, status, recommended_tier, resolved_tier, input_snapshot, matched_rules, action_by, reason)
-       VALUES ($1, $2, $3, (SELECT name FROM customer_tiers WHERE id = $4), $5::jsonb, $6::jsonb, $7, $8)`,
+       VALUES ($1, $2, UPPER($3), (SELECT UPPER(name) FROM customer_tiers WHERE id = $4), $5::jsonb, $6::jsonb, $7, $8)`,
       [
         createdId,
         overrideTierId ? "OVERRIDDEN" : "CONFIRMED",
@@ -384,7 +394,7 @@ customersRouter.post("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_
       performedBy: req.user?.userId,
     });
 
-    res.status(201).json({ data: fullCustomer });
+    res.status(201).json({ data: { ...fullCustomer, setup_token: setupToken } });
   } catch (err: any) {
     if (err.code === "23505" && err.constraint?.includes("email")) {
       return next(new ConflictError(`A customer with email ${req.body?.email} already exists.`));
@@ -662,11 +672,11 @@ customersRouter.post(
       await query(
         `INSERT INTO customer_tier_evaluations
            (customer_id, status, recommended_tier, resolved_tier, input_snapshot, matched_rules, action_by, reason)
-         VALUES ($1, 'OVERRIDDEN', $2, $3, $4::jsonb, $5::jsonb, $6, $7)`,
+         VALUES ($1, 'OVERRIDDEN', UPPER($2), UPPER($3), $4::jsonb, $5::jsonb, $6, $7)`,
         [
           customer.id,
           outcome.recommended_tier,
-          body.requested_tier,
+          requestedTierName,
           JSON.stringify(inputSnapshot),
           JSON.stringify(outcome.matched_rules),
           req.user?.userId ?? null,
@@ -728,7 +738,7 @@ customersRouter.post(
       await query(
         `INSERT INTO customer_tier_evaluations
            (customer_id, status, recommended_tier, resolved_tier, input_snapshot, matched_rules, action_by, reason)
-         VALUES ($1, 'CONFIRMED', $2, $2, '{}'::jsonb, '[]'::jsonb, $3, $4)`,
+         VALUES ($1, 'CONFIRMED', UPPER($2), UPPER($2), '{}'::jsonb, '[]'::jsonb, $3, $4)`,
         [
           customer.id,
           customer.calculated_tier_name || customer.tier_name,
@@ -783,3 +793,48 @@ customersRouter.get(
     }
   }
 );
+
+// POST /api/v1/customers/:id/generate-setup-token — generate/regenerate single-use portal setup token
+customersRouter.post(
+  "/:id/generate-setup-token",
+  requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const customer = await getCustomerOrThrow(id);
+
+      const setupToken = uuidv4();
+      const setupTokenHash = crypto.createHash("sha256").update(setupToken).digest("hex");
+      const setupTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+      await query(
+        `UPDATE customers
+         SET setup_token_hash = $1, setup_token_expires_at = $2, updated_at = NOW()
+         WHERE id = $3`,
+        [setupTokenHash, setupTokenExpiresAt, id]
+      );
+
+      await writeAuditLog({
+        entityType: "customer",
+        entityId: String(id),
+        action: "GENERATE_SETUP_TOKEN",
+        performedBy: req.user?.userId,
+        reason: "Single-use portal setup token generated by staff user",
+      });
+
+      res.json({
+        data: {
+          customer_id: Number(customer.id),
+          customer_name: customer.name,
+          email: customer.email,
+          setup_token: setupToken,
+          expires_at: setupTokenExpiresAt,
+          is_password_set: Boolean(customer.is_password_set),
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
