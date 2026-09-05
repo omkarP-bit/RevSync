@@ -12,6 +12,16 @@ async function seed() {
   // 1. Clean Reset - Truncate all tables in cascade mode
   await query(`
     TRUNCATE TABLE 
+      credit_transactions,
+      customer_credit_wallets,
+      billing_schedules,
+      subscription_changes,
+      subscriptions,
+      subscription_plans,
+      credit_notes,
+      invoice_payments,
+      invoice_lines,
+      invoices,
       fulfillment_allocations,
       fulfillment_orders,
       inventory_items,

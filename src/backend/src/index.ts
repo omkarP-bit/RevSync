@@ -22,6 +22,8 @@ import { approvalsRouter } from "./modules/approvals/approvals.routes.js";
 import { warehousesRouter, fulfillmentRouter } from "./modules/fulfillment/fulfillment.routes.js";
 import { negotiationsRouter, negotiationsPortalRouter } from "./modules/negotiations/negotiations.routes.js";
 import { invoicesRouter, creditNotesRouter, invoicesPortalRouter } from "./modules/billing/billing.routes.js";
+import { subscriptionsRouter } from "./modules/subscriptions/subscriptions.routes.js";
+import { subscriptionsPortalRouter, walletPortalRouter } from "./modules/subscriptions/subscriptionsPortal.routes.js";
 
 async function main() {
   const config = loadConfig();
@@ -58,10 +60,13 @@ async function main() {
   app.use("/api/v1/warehouses", warehousesRouter);
   app.use("/api/v1/fulfillment", fulfillmentRouter);
   app.use("/api/v1/negotiations", negotiationsRouter);
-  app.use("/api/v1/portal/negotiations", negotiationsPortalRouter);
   app.use("/api/v1/invoices", invoicesRouter);
   app.use("/api/v1/credit-notes", creditNotesRouter);
+  app.use("/api/v1/subscriptions", subscriptionsRouter);
+  app.use("/api/v1/portal/negotiations", negotiationsPortalRouter);
   app.use("/api/v1/portal/invoices", invoicesPortalRouter);
+  app.use("/api/v1/portal/subscriptions", subscriptionsPortalRouter);
+  app.use("/api/v1/portal/wallet", walletPortalRouter);
 
   app.use(errorHandler);
 

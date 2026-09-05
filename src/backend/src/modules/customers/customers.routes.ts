@@ -123,6 +123,65 @@ customersRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALE
   }
 });
 
+// GET /api/v1/customers/:id/wallet — credit wallet & transaction history
+customersRouter.get("/:id/wallet", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const custResult = await query(`SELECT id, currency_code FROM customers WHERE id = $1`, [id]);
+    if (custResult.rows.length === 0) {
+      throw new NotFoundError("Customer", id);
+    }
+    const customerId = parseInt(id);
+    const currency = custResult.rows[0].currency_code || "USD";
+
+    const walletRes = await query(
+      `SELECT id, customer_id, balance, currency, created_at, updated_at
+       FROM customer_credit_wallets WHERE customer_id = $1`,
+      [customerId]
+    );
+
+    let wallet = walletRes.rows[0];
+    if (!wallet) {
+      const insert = await query(
+        `INSERT INTO customer_credit_wallets (customer_id, balance, currency) VALUES ($1, 0, $2) RETURNING *`,
+        [customerId, currency]
+      );
+      wallet = insert.rows[0];
+    }
+
+    const txRes = await query(
+      `SELECT id, type, amount, reference_type, reference_id, description, created_at
+       FROM credit_transactions
+       WHERE wallet_id = $1
+       ORDER BY created_at DESC`,
+      [wallet.id]
+    );
+
+    res.json({
+      data: {
+        id: Number(wallet.id),
+        customer_id: Number(wallet.customer_id),
+        balance: Number(wallet.balance),
+        currency: wallet.currency,
+        created_at: wallet.created_at,
+        updated_at: wallet.updated_at,
+        transactions: txRes.rows.map((row: any) => ({
+          id: Number(row.id),
+          type: row.type,
+          amount: Number(row.amount),
+          reference_type: row.reference_type,
+          reference_id: row.reference_id ? Number(row.reference_id) : null,
+          description: row.description,
+          created_at: row.created_at,
+        })),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+
 // GET /api/v1/customers/:id/quotations
 customersRouter.get("/:id/quotations", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {

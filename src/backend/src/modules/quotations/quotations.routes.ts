@@ -3,6 +3,7 @@ import { query, withTransaction } from "../../database/pool.js";
 import { authenticate, requireRole, ROLES } from "../../middleware/auth.js";
 import { NotFoundError, ValidationError, UnprocessableEntityError, ConflictError, ForbiddenError } from "../../shared/errors.js";
 import { writeAuditLog } from "../../shared/audit.js";
+import { createSubscriptionsForQuotation } from "../../engines/subscription-engine.js";
 
 function assertQuotationNotConfirmed(status: string): void {
   if (status === "CONFIRMED") {
@@ -398,19 +399,38 @@ quotationsRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.S
         }
       }
 
-      await query(
-        `UPDATE quotations SET status = $1, updated_at = NOW() WHERE id = $2`,
-        [targetStatus, realId]
-      );
-      await writeAuditLog({
-        entityType: "quotations",
-        entityId: realId,
-        action: targetStatus,
-        before: { status: quote.status },
-        after: { status: targetStatus },
-        performedBy: userId,
-        reason: "Manual status update",
-      });
+      if (targetStatus === "CONFIRMED") {
+        await withTransaction(async (client) => {
+          await client.query(
+            `UPDATE quotations SET status = $1, updated_at = NOW() WHERE id = $2`,
+            [targetStatus, realId]
+          );
+          await createSubscriptionsForQuotation(client, realId, userId);
+          await writeAuditLog({
+            entityType: "quotations",
+            entityId: realId,
+            action: targetStatus,
+            before: { status: quote.status },
+            after: { status: targetStatus },
+            performedBy: userId,
+            reason: "Quotation confirmed; recurring subscriptions & billing schedules initialized",
+          });
+        });
+      } else {
+        await query(
+          `UPDATE quotations SET status = $1, updated_at = NOW() WHERE id = $2`,
+          [targetStatus, realId]
+        );
+        await writeAuditLog({
+          entityType: "quotations",
+          entityId: realId,
+          action: targetStatus,
+          before: { status: quote.status },
+          after: { status: targetStatus },
+          performedBy: userId,
+          reason: "Manual status update",
+        });
+      }
     }
 
     if (fields.customer_id) {
