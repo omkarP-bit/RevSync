@@ -20,6 +20,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const pathname = usePathname();
   const router = useRouter();
   const [authorized, setAuthorized] = useState<boolean | null>(null);
+  const [roleId, setRoleId] = useState<number>(0);
 
   useEffect(() => {
     const stored = localStorage.getItem("user");
@@ -29,6 +30,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     }
     try {
       const user = JSON.parse(stored);
+      setRoleId(Number(user.role_id));
       // Role ID 1 = Sales Representative -> Block access to Admin Panel
       if (Number(user.role_id) === 1) {
         setAuthorized(false);
@@ -41,6 +43,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       router.push("/login");
     }
   }, [router]);
+
+  // Warehouses backend is restricted to Finance, Warehouse Manager, and Admin.
+  const visibleLinks = adminLinks.filter(
+    (l) => l.href !== "/admin/warehouses" || roleId === 3 || roleId === 4 || roleId === 5
+  );
 
   if (authorized === null) {
     return <div className="flex items-center justify-center min-h-screen text-slate-500 font-medium">Checking permissions...</div>;
@@ -56,7 +63,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <div className="flex items-center gap-6 max-w-7xl mx-auto">
           <Link href="/admin" className="text-xl font-bold text-purple-600">Admin Panel</Link>
           <div className="flex gap-1">
-            {adminLinks.map((l) => (
+            {visibleLinks.map((l) => (
               <Link
                 key={l.href}
                 href={l.href}

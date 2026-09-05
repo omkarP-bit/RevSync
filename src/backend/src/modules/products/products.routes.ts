@@ -100,7 +100,7 @@ productsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MA
 });
 
 // GET /api/v1/products/inventory (all product x warehouse stock locations)
-productsRouter.get("/inventory", requireRole(ROLES.ADMIN, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+productsRouter.get("/inventory", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await query(
       `SELECT ii.id, ii.product_id, p.name AS product_name, p.sku,
