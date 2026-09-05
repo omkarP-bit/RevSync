@@ -242,7 +242,7 @@ export default function QuotationEditorPage() {
             {quote.lines.length === 0 ? (
               <tr>
                 <td colSpan={7} className="px-4 py-8 text-center text-gray-400">
-                  No line items added yet. Click "+ Add Product Line" above to add products to this quote.
+                  No line items added yet. Click &quot;+ Add Product Line&quot; above to add products to this quote.
                 </td>
               </tr>
             ) : (

@@ -278,7 +278,7 @@ export default function AdminPriceListsPage() {
                     {selectedList.items.length === 0 ? (
                       <tr>
                         <td colSpan={3} className="px-4 py-6 text-center text-gray-400">
-                          No product prices set for this list yet. Click "+ Add / Update Product Price" to add one.
+                          No product prices set for this list yet. Click &quot;+ Add / Update Product Price&quot; to add one.
                         </td>
                       </tr>
                     ) : (

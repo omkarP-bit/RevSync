@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import jwt from "jsonwebtoken";
 import express from "express";
 import request from "supertest";
-import { productsRouter } from "../modules/products/products.routes.ts";
+import { productsRouter } from "../modules/products/products.routes.js";
 import { errorHandler } from "../middleware/errorHandler.js";
 import * as db from "../database/pool.js";
 

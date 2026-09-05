@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import jwt from "jsonwebtoken";
 import express from "express";
 import request from "supertest";
-import { quotationsRouter } from "../modules/quotations/quotations.routes.ts";
+import { quotationsRouter } from "../modules/quotations/quotations.routes.js";
 import { errorHandler } from "../middleware/errorHandler.js";
 import * as db from "../database/pool.js";
 

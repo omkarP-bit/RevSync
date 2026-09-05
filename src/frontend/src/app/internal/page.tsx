@@ -112,7 +112,7 @@ export default function InternalDashboard() {
               ) : quotations.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-6 text-center text-gray-400">
-                    No quotations created yet. Click "+ Create / View Quotations" to get started.
+                    No quotations created yet. Click &quot;+ Create / View Quotations&quot; to get started.
                   </td>
                 </tr>
               ) : (
