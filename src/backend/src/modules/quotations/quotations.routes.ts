@@ -63,6 +63,7 @@ import {
   recalculateAndPersistQuotation,
   createApprovalRequest,
   reopenApprovalAfterEdit,
+  executeQuotationConfirmation,
   RecalcResult,
 } from "../../shared/quote-workflow.js";
 import { z } from "zod";
@@ -406,27 +407,7 @@ quotationsRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.S
       }
 
       if (targetStatus === "CONFIRMED") {
-        await withTransaction(async (client) => {
-          await client.query(
-            `UPDATE quotations SET status = $1, updated_at = NOW() WHERE id = $2`,
-            [targetStatus, realId]
-          );
-          await createSubscriptionsForQuotation(client, realId, userId);
-          await createFulfillmentForQuotation(client, realId, userId, { skipIfNotFulfillable: true });
-          await writeAuditLog({
-            entityType: "quotations",
-            entityId: realId,
-            action: targetStatus,
-            before: { status: quote.status },
-            after: {
-              status: targetStatus,
-              payment_terms: quote.payment_terms,
-              fulfillment: "AUTO_CREATED",
-            },
-            performedBy: userId,
-            reason: "Quotation confirmed; subscriptions & billing schedules initialized and stock allocated",
-          });
-        });
+        await executeQuotationConfirmation(realId, userId);
       } else {
         await query(
           `UPDATE quotations SET status = $1, updated_at = NOW() WHERE id = $2`,

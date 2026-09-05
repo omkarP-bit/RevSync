@@ -561,26 +561,76 @@ negotiationsPortalRouter.get("/", async (req: Request, res: Response, next: Next
   }
 });
 
+async function getOrCreatePortalNegotiation(quotationPublicId: string, customerId: number) {
+  const result = await query(
+    `SELECT q.id as quotation_id, q.public_id, q.quotation_number, q.customer_id,
+            q.currency_code, q.grand_total, q.status as quotation_status,
+            n.id as negotiation_id, n.status as negotiation_status
+     FROM quotations q
+     LEFT JOIN negotiations n ON n.quotation_id = q.id
+     WHERE q.public_id::text = $1`,
+    [quotationPublicId]
+  );
+
+  if (result.rows.length === 0) {
+    throw new NotFoundError("Negotiation", quotationPublicId);
+  }
+
+  const row = result.rows[0];
+
+  if (Number(row.customer_id) !== Number(customerId)) {
+    throw new ForbiddenError("This quotation does not belong to your account");
+  }
+
+  let negotiationId: number;
+  let negotiationStatus: string;
+  let quotationStatus: string = row.quotation_status || "NEGOTIATION";
+
+  const existingId = row.negotiation_id ?? row.id;
+  if (existingId) {
+    negotiationId = Number(existingId);
+    negotiationStatus = row.negotiation_status ?? row.status ?? "OPEN";
+  } else {
+    const insertResult = await query(
+      `INSERT INTO negotiations (quotation_id, status) VALUES ($1, 'OPEN') RETURNING id, status`,
+      [row.quotation_id || row.id]
+    );
+    negotiationId = Number(insertResult.rows[0].id);
+    negotiationStatus = insertResult.rows[0].status;
+
+    if (["APPROVED", "SENT", "DRAFT"].includes(quotationStatus)) {
+      await query(`UPDATE quotations SET status = 'NEGOTIATION', updated_at = NOW() WHERE id = $1`, [row.quotation_id || row.id]);
+      quotationStatus = "NEGOTIATION";
+    }
+
+    await writeAuditLog({
+      entityType: "negotiations",
+      entityId: negotiationId,
+      action: "OPENED_BY_CUSTOMER",
+      before: null,
+      after: { status: "OPEN", quotation_id: row.quotation_id || row.id },
+      performedBy: undefined,
+      reason: "Customer opened negotiation channel from Customer Portal",
+    });
+  }
+
+  return {
+    id: negotiationId,
+    quotation_id: Number(row.quotation_id || row.id),
+    public_id: row.public_id,
+    quotation_number: row.quotation_number,
+    quotation_status: quotationStatus,
+    negotiation_status: negotiationStatus,
+    currency_code: row.currency_code,
+    grand_total: Number(row.grand_total),
+  };
+}
+
 // GET /api/v1/portal/negotiations/:quotationPublicId
 negotiationsPortalRouter.get("/:quotationPublicId", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const customerId = (req as any).customer.customerId;
-    const result = await query(
-      `SELECT n.id, n.quotation_id, q.public_id, q.quotation_number, q.customer_id,
-              q.currency_code, q.grand_total, q.status as quotation_status,
-              n.status as negotiation_status
-       FROM negotiations n
-       JOIN quotations q ON n.quotation_id = q.id
-       WHERE q.public_id::text = $1`,
-      [req.params.quotationPublicId]
-    );
-    if (result.rows.length === 0) {
-      throw new NotFoundError("Negotiation", req.params.quotationPublicId);
-    }
-    const negotiation = result.rows[0];
-    if (Number(negotiation.customer_id) !== Number(customerId)) {
-      throw new ForbiddenError("This quotation does not belong to your account");
-    }
+    const negotiation = await getOrCreatePortalNegotiation(req.params.quotationPublicId, customerId);
 
     const requestsResult = await query(
       `SELECT ${PORTAL_REQUEST_FIELDS}
@@ -647,16 +697,9 @@ negotiationsPortalRouter.post("/:quotationPublicId/requests", async (req: Reques
     const customerId = (req as any).customer.customerId;
     const body = createRequestSchema.parse(req.body);
 
-    const result = await query(
-      `SELECT n.id, n.status, n.quotation_id, q.customer_id
-       FROM negotiations n JOIN quotations q ON n.quotation_id = q.id
-       WHERE q.public_id::text = $1`,
-      [req.params.quotationPublicId]
-    );
-    if (result.rows.length === 0) throw new NotFoundError("Negotiation", req.params.quotationPublicId);
-    const negotiation = result.rows[0];
-    if (Number(negotiation.customer_id) !== Number(customerId)) throw new ForbiddenError("This quotation does not belong to your account");
-    if (negotiation.status !== "OPEN") throw new UnprocessableEntityError("This negotiation is closed");
+    const negotiation = await getOrCreatePortalNegotiation(req.params.quotationPublicId, customerId);
+    if (negotiation.quotation_status === "CONFIRMED") throw new ConflictError("Confirmed quotations are locked against further negotiation modifications");
+    if (negotiation.negotiation_status !== "OPEN") throw new UnprocessableEntityError("This negotiation is closed");
     if (body.request_type === "DISCOUNT" && body.quotation_line_id == null) {
       throw new ValidationError("Discount requests require a quotation_line_id");
     }
@@ -693,15 +736,8 @@ negotiationsPortalRouter.post("/:quotationPublicId/messages", async (req: Reques
     const customerId = (req as any).customer.customerId;
     const { body } = messageSchema.parse(req.body);
 
-    const result = await query(
-      `SELECT n.id, n.status, q.customer_id FROM negotiations n JOIN quotations q ON n.quotation_id = q.id
-       WHERE q.public_id::text = $1`,
-      [req.params.quotationPublicId]
-    );
-    if (result.rows.length === 0) throw new NotFoundError("Negotiation", req.params.quotationPublicId);
-    const negotiation = result.rows[0];
-    if (Number(negotiation.customer_id) !== Number(customerId)) throw new ForbiddenError("This quotation does not belong to your account");
-    if (negotiation.status !== "OPEN") throw new UnprocessableEntityError("This negotiation is closed");
+    const negotiation = await getOrCreatePortalNegotiation(req.params.quotationPublicId, customerId);
+    if (negotiation.negotiation_status !== "OPEN") throw new UnprocessableEntityError("This negotiation is closed");
 
     await query(
       `INSERT INTO negotiation_messages (negotiation_id, sender_type, body)

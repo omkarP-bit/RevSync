@@ -160,7 +160,9 @@ subscriptionsPortalRouter.get("/:id", async (req: Request, res: Response, next: 
 walletPortalRouter.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const customerId = (req as any).customer.customerId;
-    const wallet = await getOrCreateWallet(null, customerId, "USD");
+    const custResult = await query(`SELECT currency_code FROM customers WHERE id = $1`, [customerId]);
+    const currency = custResult.rows[0]?.currency_code || "USD";
+    const wallet = await getOrCreateWallet(null, customerId, currency);
 
     const txRes = await query(
       `SELECT id, type, amount, reference_type, reference_id, description, created_at
