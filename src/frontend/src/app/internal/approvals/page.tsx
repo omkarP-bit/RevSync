@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface ApprovalRequest {
   id: number;
@@ -47,6 +48,7 @@ export default function ApprovalsListPage() {
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const { format } = useCurrency();
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
@@ -153,7 +155,7 @@ export default function ApprovalsListPage() {
                     {Number(r.total_overage).toFixed(1)} pts
                   </td>
                   <td className="px-6 py-4 text-right font-bold text-gray-900">
-                    {r.currency_code} {Number(r.grand_total).toFixed(2)}
+                    {format(r.grand_total)}
                   </td>
                   <td className="px-6 py-4 text-gray-600">
                     {r.current_step ? `Step ${r.current_step.sequence} · ${r.current_step.role_name}` : "-"}

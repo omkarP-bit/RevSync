@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface FulfillmentOrder {
   id: number;
@@ -43,6 +44,7 @@ export default function FulfillmentListPage() {
   const [userRoleId, setUserRoleId] = useState<number | null>(null);
   const [quoteId, setQuoteId] = useState("");
   const [creating, setCreating] = useState(false);
+  const { format } = useCurrency();
 
   const isFulfillmentManager = userRoleId === 4 || userRoleId === 5;
 
@@ -186,7 +188,7 @@ export default function FulfillmentListPage() {
                   <td className="px-6 py-4 font-medium text-gray-900">{o.customer_name}</td>
                   <td className="px-6 py-4 text-right font-semibold text-red-600">{o.backordered_quantity}</td>
                   <td className="px-6 py-4 text-right font-bold text-gray-900">
-                    ${Number(o.shipping_cost).toFixed(2)}
+                    {format(o.shipping_cost)}
                   </td>
                   <td className="px-6 py-4 text-gray-600">{new Date(o.created_at).toLocaleDateString()}</td>
                   <td className="px-6 py-4">

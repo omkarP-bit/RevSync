@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
 import { exportSubscriptionPdf } from "@/lib/pdf";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface Plan {
   id: number;
@@ -100,6 +101,7 @@ export default function SubscriptionDetailPage() {
   const [newQuantity, setNewQuantity] = useState<number>(1);
   const [submittingChange, setSubmittingChange] = useState(false);
   const [changeResult, setChangeResult] = useState<any>(null);
+  const { format } = useCurrency();
 
   // Cancel Modal State
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -175,10 +177,6 @@ export default function SubscriptionDetailPage() {
     } finally {
       setSubmittingCancel(false);
     }
-  };
-
-  const formatCurrency = (amount: number, curr = "USD") => {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: curr }).format(amount);
   };
 
   const formatDate = (dateStr?: string) => {
@@ -302,10 +300,10 @@ export default function SubscriptionDetailPage() {
           <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
             <span className="text-2xs font-bold text-gray-400 uppercase tracking-wider">Recurring Amount</span>
             <div className="text-lg font-extrabold text-gray-900 mt-1">
-              {formatCurrency(sub.recurring_amount, sub.currency)}
+              {format(sub.recurring_amount)}
             </div>
             <div className="text-2xs text-gray-500 font-mono mt-0.5">
-              {sub.quantity} × {formatCurrency(sub.unit_price, sub.currency)}
+              {sub.quantity} × {format(sub.unit_price)}
             </div>
           </div>
 
@@ -334,7 +332,7 @@ export default function SubscriptionDetailPage() {
           <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200">
             <span className="text-2xs font-bold text-emerald-600 uppercase tracking-wider">Credit Wallet</span>
             <div className="text-lg font-extrabold text-emerald-900 mt-1">
-              {formatCurrency(sub.wallet_balance, sub.currency)}
+              {format(sub.wallet_balance)}
             </div>
             <div className="text-2xs text-emerald-700 font-semibold mt-0.5">Auto-offsets invoices</div>
           </div>
@@ -411,7 +409,7 @@ export default function SubscriptionDetailPage() {
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-bold text-gray-900">
-                            {formatCurrency(sched.amount, sub.currency)}
+                            {format(sched.amount)}
                           </span>
                           <span
                             className={`px-2 py-0.5 text-2xs font-bold rounded-full ${sched.status === "PAID"
@@ -478,15 +476,15 @@ export default function SubscriptionDetailPage() {
                             {inv.invoice_type}
                           </span>
                         </td>
-                        <td className="px-4 py-3 font-semibold">{formatCurrency(inv.grand_total, sub.currency)}</td>
+                        <td className="px-4 py-3 font-semibold">{format(inv.grand_total)}</td>
                         <td className="px-4 py-3 text-emerald-700 font-semibold">
-                          {formatCurrency(inv.wallet_offset_amount, sub.currency)}
+                          {format(inv.wallet_offset_amount)}
                         </td>
                         <td className="px-4 py-3 font-semibold text-gray-800">
-                          {formatCurrency(inv.total_paid, sub.currency)}
+                          {format(inv.total_paid)}
                         </td>
                         <td className="px-4 py-3 font-bold text-gray-900">
-                          {formatCurrency(inv.balance_due, sub.currency)}
+                          {format(inv.balance_due)}
                         </td>
                         <td className="px-4 py-3">
                           <span
@@ -530,13 +528,13 @@ export default function SubscriptionDetailPage() {
                       <div>
                         <span className="text-gray-400">Old Value:</span>{" "}
                         <span className="font-semibold text-gray-800">
-                          {formatCurrency(change.old_period_value, sub.currency)} (qty: {change.old_quantity})
+                          {format(change.old_period_value)} (qty: {change.old_quantity})
                         </span>
                       </div>
                       <div>
                         <span className="text-gray-400">New Value:</span>{" "}
                         <span className="font-semibold text-gray-800">
-                          {formatCurrency(change.new_period_value, sub.currency)} (qty: {change.new_quantity})
+                          {format(change.new_period_value)} (qty: {change.new_quantity})
                         </span>
                       </div>
                       <div>
@@ -556,7 +554,7 @@ export default function SubscriptionDetailPage() {
                             }`}
                         >
                           {change.proration_amount > 0 ? "+" : ""}
-                          {formatCurrency(change.proration_amount, sub.currency)}
+                          {format(change.proration_amount)}
                         </span>
                       </div>
                     </div>
@@ -614,11 +612,11 @@ export default function SubscriptionDetailPage() {
                 </div>
                 <div className="flex justify-between text-slate-600">
                   <span>Current Period Value:</span>
-                  <span className="font-semibold">{formatCurrency(oldPeriodValue, sub.currency)}</span>
+                  <span className="font-semibold">{format(oldPeriodValue)}</span>
                 </div>
                 <div className="flex justify-between text-slate-600">
                   <span>New Period Value:</span>
-                  <span className="font-semibold">{formatCurrency(newPeriodValue, sub.currency)}</span>
+                  <span className="font-semibold">{format(newPeriodValue)}</span>
                 </div>
                 <div className="flex justify-between text-slate-600 font-mono">
                   <span>Remaining Fraction:</span>
@@ -629,7 +627,7 @@ export default function SubscriptionDetailPage() {
                 <div className="flex justify-between border-t border-slate-200 pt-2 font-bold text-sm">
                   <span>Prorated Adjustment:</span>
                   <span className={estimatedProration >= 0 ? "text-indigo-600" : "text-emerald-600"}>
-                    {estimatedProration >= 0 ? `+${formatCurrency(estimatedProration, sub.currency)} (Owed)` : `${formatCurrency(estimatedProration, sub.currency)} (Credit)`}
+                    {estimatedProration >= 0 ? `+${format(estimatedProration)} (Owed)` : `${format(estimatedProration)} (Credit)`}
                   </span>
                 </div>
               </div>
@@ -684,7 +682,7 @@ export default function SubscriptionDetailPage() {
                 </div>
                 <div className="flex justify-between border-t border-emerald-200 pt-2 font-bold text-sm text-emerald-950">
                   <span>Wallet Credit Refund:</span>
-                  <span>+{formatCurrency(estimatedUnusedPrepaid, sub.currency)}</span>
+                  <span>+{format(estimatedUnusedPrepaid)}</span>
                 </div>
               </div>
 

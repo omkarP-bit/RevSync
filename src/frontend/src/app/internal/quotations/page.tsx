@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiResponse } from "@/lib/api";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface Quotation {
   id: number;
@@ -46,6 +47,7 @@ export default function QuotationsListPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
+  const { format } = useCurrency();
 
   // View Mode: 'kanban' or 'list'
   const [viewMode, setViewMode] = useState<"kanban" | "list">("kanban");
@@ -407,7 +409,7 @@ export default function QuotationsListPage() {
                       </span>
                     </div>
                     <span className="text-[11px] font-mono font-bold text-gray-500">
-                      ${colTotalSum.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                      {format(colTotalSum)}
                     </span>
                   </div>
 
@@ -465,7 +467,7 @@ export default function QuotationsListPage() {
                           <div className="pt-1.5 border-t border-gray-100 flex items-center justify-between">
                             <span className="text-[10px] font-medium text-gray-400">Grand Total</span>
                             <span className="text-xs font-extrabold text-gray-900 font-mono">
-                              {q.currency_code} {Number(q.grand_total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              {format(q.grand_total)}
                             </span>
                           </div>
                           </div>
@@ -552,7 +554,7 @@ export default function QuotationsListPage() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-right font-extrabold text-gray-900">
-                        {q.currency_code} {Number(q.grand_total).toFixed(2)}
+                        {format(q.grand_total)}
                       </td>
                       <td className="px-6 py-4 text-right font-semibold text-blue-700">
                         {Number(q.margin_pct).toFixed(1)}%

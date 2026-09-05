@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiResponse } from "@/lib/api";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface NegotiationRow {
   id: number;
@@ -22,6 +23,7 @@ export default function NegotiationsListPage() {
   const [negotiations, setNegotiations] = useState<NegotiationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const { format } = useCurrency();
 
   const [showModal, setShowModal] = useState(false);
   const [quotationId, setQuotationId] = useState("");
@@ -126,7 +128,7 @@ export default function NegotiationsListPage() {
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right font-extrabold text-gray-900">
-                    {n.currency_code} {Number(n.grand_total).toFixed(2)}
+                    {format(n.grand_total)}
                   </td>
                   <td className="px-6 py-4 text-right">
                     <button

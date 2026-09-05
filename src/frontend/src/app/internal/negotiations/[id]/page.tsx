@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api, ApiResponse } from "@/lib/api";
 import { exportNegotiationPdf } from "@/lib/pdf";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface NegotiationRequest {
   id: number;
@@ -84,6 +85,7 @@ export default function NegotiationDetailPage() {
 
   const [chatBody, setChatBody] = useState("");
   const [sending, setSending] = useState(false);
+  const { format } = useCurrency();
 
   const isManager = roleId === 2 || roleId === 5;
 
@@ -177,7 +179,7 @@ export default function NegotiationDetailPage() {
           </h1>
           <p className="text-xs text-gray-500">
             Internal negotiation thread · Grand total{" "}
-            <span className="font-bold text-gray-900">{neg.currency_code} {Number(neg.grand_total).toFixed(2)}</span>
+            <span className="font-bold text-gray-900">{format(neg.grand_total)}</span>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -236,13 +238,13 @@ export default function NegotiationDetailPage() {
                   <tr key={l.id}>
                     <td className="px-5 py-2 font-semibold text-gray-900">{l.product_name}</td>
                     <td className="px-5 py-2 text-right text-gray-600">{l.quantity}</td>
-                    <td className="px-5 py-2 text-right text-gray-600">{Number(l.unit_price).toFixed(2)}</td>
+                    <td className="px-5 py-2 text-right text-gray-600">{format(l.unit_price)}</td>
                     <td className="px-5 py-2 text-right text-sm">
                       <span className={Number(l.applied_discount_pct) > 0 ? "text-purple-700 font-semibold" : "text-gray-400"}>
                         {Number(l.applied_discount_pct).toFixed(2)}%
                       </span>
                     </td>
-                    <td className="px-5 py-2 text-right font-extrabold text-gray-900">{Number(l.line_total).toFixed(2)}</td>
+                    <td className="px-5 py-2 text-right font-extrabold text-gray-900">{format(l.line_total)}</td>
                   </tr>
                 ))}
               </tbody>

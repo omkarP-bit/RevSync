@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
 import { exportApprovalPdf } from "@/lib/pdf";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface ApprovalStep {
   id: number;
@@ -59,6 +60,7 @@ export default function ApprovalDetailPage() {
   const [error, setError] = useState("");
   const [notes, setNotes] = useState("");
   const [acting, setActing] = useState(false);
+  const { format } = useCurrency();
 
   const fetchApproval = async () => {
     setLoading(true);
@@ -170,7 +172,7 @@ export default function ApprovalDetailPage() {
           </div>
           <div className="bg-gray-50 p-3 rounded">
             <span className="text-gray-500 block">Grand Total</span>
-            <span className="text-sm font-bold text-gray-900">{approval.currency_code} {Number(approval.grand_total).toFixed(2)}</span>
+            <span className="text-sm font-bold text-gray-900">{format(approval.grand_total)}</span>
           </div>
           <div className="bg-gray-50 p-3 rounded">
             <span className="text-gray-500 block">Discount Overage</span>

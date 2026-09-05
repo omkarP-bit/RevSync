@@ -6,6 +6,7 @@ import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
 import { CustomerFormModal, Customer as ModalCustomer } from "@/components/CustomerFormModal";
 import { exportQuotationPdf } from "@/lib/pdf";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface QuotationLine {
   id: number;
@@ -195,6 +196,7 @@ export default function QuotationDetailBuilderPage() {
   // Cancel Modal State
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const { format } = useCurrency();
 
   useEffect(() => {
     try {
@@ -711,7 +713,7 @@ export default function QuotationDetailBuilderPage() {
               />
             </div>
           </div>
-          <div className="text-[10px] text-slate-400 mt-1 font-mono">Currency: {quote.currency_code}</div>
+          <div className="text-[10px] text-slate-400 mt-1 font-mono">Quote Currency: {quote.currency_code}</div>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
@@ -833,7 +835,7 @@ export default function QuotationDetailBuilderPage() {
 
                     {/* Unit Cost */}
                     <td className="px-4 py-3 text-right text-slate-500 font-mono">
-                      {quote.currency_code} {Number(line.unit_cost).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      {format(line.unit_cost)}
                     </td>
 
                     {/* Qty Input */}
@@ -875,7 +877,7 @@ export default function QuotationDetailBuilderPage() {
                     </td>
                     {/* Price */}
                     <td className="px-4 py-3 text-right font-semibold text-slate-800 font-mono">
-                      {quote.currency_code} {Number(line.unit_price).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      {format(line.unit_price)}
                     </td>
 
                     {/* Discount Input */}
@@ -915,13 +917,13 @@ export default function QuotationDetailBuilderPage() {
 
                     {/* Line Total */}
                     <td className="px-4 py-3 text-right font-extrabold text-slate-900 font-mono">
-                      {quote.currency_code} {Number(line.line_total).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      {format(line.line_total)}
                     </td>
 
                     {/* Margin */}
                     <td className="px-4 py-3 text-right">
                       <div className="font-bold text-emerald-700 font-mono">
-                        {quote.currency_code} {Number(line.line_margin).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        {format(line.line_margin)}
                       </div>
                       <div className="text-[10px] text-slate-400">
                         {(Number(line.line_subtotal) > 0 ? (Number(line.line_margin) / Number(line.line_subtotal)) * 100 : 0).toFixed(1)}%
@@ -1017,46 +1019,46 @@ export default function QuotationDetailBuilderPage() {
         <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-4 text-xs w-full md:w-auto">
           <div>
             <span className="text-slate-400 block font-semibold">Subtotal</span>
-            <span className="font-bold text-slate-800">{quote.currency_code} {Number(quote.subtotal).toFixed(2)}</span>
+            <span className="font-bold text-slate-800">{format(quote.subtotal)}</span>
           </div>
 
           <div>
             <span className="text-slate-400 block font-semibold">Line Disc. Total</span>
             <span className="font-bold text-amber-600">
-              -{quote.currency_code} {(Number(quote.discount_total) - Number(quote.order_discount_amount || 0)).toFixed(2)}
+              -{format(Number(quote.discount_total) - Number(quote.order_discount_amount || 0))}
             </span>
           </div>
 
           <div>
             <span className="text-slate-400 block font-semibold">Order Disc ({quote.order_discount_pct || 0}%)</span>
             <span className="font-bold text-amber-700">
-              -{quote.currency_code} {Number(quote.order_discount_amount || 0).toFixed(2)}
+              -{format(Number(quote.order_discount_amount || 0))}
             </span>
           </div>
 
           <div>
             <span className="text-slate-400 block font-semibold">Total Cost</span>
-            <span className="font-bold text-slate-700">{quote.currency_code} {Number(quote.total_cost || 0).toFixed(2)}</span>
+            <span className="font-bold text-slate-700">{format(Number(quote.total_cost || 0))}</span>
           </div>
 
           <div>
             <span className="text-slate-400 block font-semibold">Margin ({Number(quote.margin_pct || 0).toFixed(1)}%)</span>
-            <span className="font-bold text-emerald-700">{quote.currency_code} {Number(quote.margin_amount || 0).toFixed(2)}</span>
+            <span className="font-bold text-emerald-700">{format(Number(quote.margin_amount || 0))}</span>
           </div>
 
           <div>
             <span className="text-slate-400 block font-semibold">Tax ({quote.tax_rate_pct}%)</span>
-            <span className="font-bold text-slate-700">{quote.currency_code} {Number(quote.tax_total).toFixed(2)}</span>
+            <span className="font-bold text-slate-700">{format(quote.tax_total)}</span>
           </div>
 
           <div>
             <span className="text-slate-400 block font-semibold">Grand Total</span>
-            <span className="text-base font-extrabold text-blue-700">{quote.currency_code} {Number(quote.grand_total).toFixed(2)}</span>
+            <span className="text-base font-extrabold text-blue-700">{format(quote.grand_total)}</span>
           </div>
 
           <div>
             <span className="text-slate-400 block font-semibold">Margin Amount</span>
-            <span className="font-bold text-emerald-700">{quote.currency_code} {Number(quote.margin_amount).toFixed(2)}</span>
+            <span className="font-bold text-emerald-700">{format(quote.margin_amount)}</span>
           </div>
 
           <div>

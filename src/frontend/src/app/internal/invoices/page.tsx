@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface Invoice {
   id: number;
@@ -59,6 +60,7 @@ export default function InvoicesListPage() {
   const [billable, setBillable] = useState<BillableQuotation[]>([]);
   const [loadingBillable, setLoadingBillable] = useState(false);
   const [generating, setGenerating] = useState<number | null>(null);
+  const { format } = useCurrency();
 
   const canManage = userRoleId === 3 || userRoleId === 5;
 
@@ -198,13 +200,13 @@ export default function InvoicesListPage() {
                   <td className="px-6 py-4 font-medium text-gray-900">{inv.customer_name}</td>
                   <td className="px-6 py-4 font-mono text-gray-600">{inv.quotation_number}</td>
                   <td className="px-6 py-4 text-right font-bold text-gray-900">
-                    ${Number(inv.grand_total).toFixed(2)}
+                    {format(inv.grand_total)}
                   </td>
                   <td className="px-6 py-4 text-right text-green-600">
-                    ${Number(inv.total_paid).toFixed(2)}
+                    {format(inv.total_paid)}
                   </td>
                   <td className="px-6 py-4 text-right font-semibold text-red-600">
-                    ${Number(inv.balance_due).toFixed(2)}
+                    {format(inv.balance_due)}
                   </td>
                   <td className="px-6 py-4 text-gray-600">
                     {new Date(inv.due_date).toLocaleDateString()}
@@ -282,7 +284,7 @@ export default function InvoicesListPage() {
                         <td className="px-4 py-3 font-mono text-blue-700">{q.quotation_number}</td>
                         <td className="px-4 py-3 text-gray-900">{q.customer_name}</td>
                         <td className="px-4 py-3 text-right font-semibold">
-                          {q.currency_code} {Number(q.grand_total).toFixed(2)}
+                          {format(q.grand_total)}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <button

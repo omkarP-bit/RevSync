@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
 import { exportInvoicePdf } from "@/lib/pdf";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface InvoiceLine {
   id: number;
@@ -93,6 +94,7 @@ export default function InvoiceDetailPage() {
   const [showCreditNote, setShowCreditNote] = useState(false);
   const [cnAmount, setCnAmount] = useState("");
   const [cnReason, setCnReason] = useState("");
+  const { format } = useCurrency();
 
   const canManage = userRoleId === 3 || userRoleId === 5;
 
@@ -225,19 +227,19 @@ export default function InvoiceDetailPage() {
           <div className="bg-gray-50 p-3 rounded">
             <span className="text-gray-500 block">Grand Total</span>
             <span className="text-sm font-bold text-gray-900">
-              {invoice.currency_code} {Number(invoice.grand_total).toFixed(2)}
+              {format(invoice.grand_total)}
             </span>
           </div>
           <div className="bg-gray-50 p-3 rounded">
             <span className="text-gray-500 block">Paid</span>
             <span className="text-sm font-bold text-green-600">
-              {invoice.currency_code} {Number(invoice.total_paid).toFixed(2)}
+              {format(invoice.total_paid)}
             </span>
           </div>
           <div className="bg-gray-50 p-3 rounded">
             <span className="text-gray-500 block">Balance Due</span>
             <span className="text-sm font-bold text-red-600">
-              {invoice.currency_code} {Number(balanceDue).toFixed(2)}
+              {format(balanceDue)}
             </span>
           </div>
         </div>
@@ -275,14 +277,14 @@ export default function InvoiceDetailPage() {
                   </td>
                   <td className="px-4 py-3 text-right">{line.quantity}</td>
                   <td className="px-4 py-3 text-right">
-                    {invoice.currency_code} {Number(line.unit_price).toFixed(2)}
+                    {format(line.unit_price)}
                   </td>
                   <td className="px-4 py-3 text-right">{Number(line.applied_discount_pct).toFixed(1)}%</td>
                   <td className="px-4 py-3 text-right text-gray-600">
-                    {invoice.currency_code} {Number(line.line_subtotal).toFixed(2)}
+                    {format(line.line_subtotal)}
                   </td>
                   <td className="px-4 py-3 text-right font-semibold">
-                    {invoice.currency_code} {Number(line.line_total).toFixed(2)}
+                    {format(line.line_total)}
                   </td>
                 </tr>
               ))}
@@ -292,19 +294,19 @@ export default function InvoiceDetailPage() {
 
         <div className="flex justify-end pt-4 border-t border-gray-100 text-sm space-y-1 flex-col items-end">
           <div className="text-gray-600">
-            Subtotal: {invoice.currency_code} {Number(invoice.subtotal).toFixed(2)}
+            Subtotal: {format(invoice.subtotal)}
           </div>
           <div className="text-gray-600">
-            Line Discounts: −{invoice.currency_code} {Number(invoice.discount_total - invoice.order_discount_amount).toFixed(2)}
+            Line Discounts: −{format(invoice.discount_total - invoice.order_discount_amount)}
           </div>
           <div className="text-gray-600">
-            Order Discount ({Number(invoice.order_discount_pct).toFixed(1)}%): −{invoice.currency_code} {Number(invoice.order_discount_amount).toFixed(2)}
+            Order Discount ({Number(invoice.order_discount_pct).toFixed(1)}%): −{format(invoice.order_discount_amount)}
           </div>
           <div className="text-gray-600">
-            Tax ({Number(invoice.tax_rate_pct).toFixed(1)}%): {invoice.currency_code} {Number(invoice.tax_total).toFixed(2)}
+            Tax ({Number(invoice.tax_rate_pct).toFixed(1)}%): {format(invoice.tax_total)}
           </div>
           <div className="font-bold text-gray-900">
-            Grand Total: {invoice.currency_code} {Number(invoice.grand_total).toFixed(2)}
+            Grand Total: {format(invoice.grand_total)}
           </div>
         </div>
       </div>
@@ -342,7 +344,7 @@ export default function InvoiceDetailPage() {
                   <td className="px-4 py-3">{new Date(p.payment_date).toLocaleDateString()}</td>
                   <td className="px-4 py-3">{p.payment_method}</td>
                   <td className="px-4 py-3 text-right font-semibold text-green-600">
-                    {invoice.currency_code} {Number(p.amount_paid).toFixed(2)}
+                    {format(p.amount_paid)}
                   </td>
                   <td className="px-4 py-3 text-gray-500">{p.notes ?? "-"}</td>
                 </tr>
@@ -383,7 +385,7 @@ export default function InvoiceDetailPage() {
                   <td className="px-4 py-3 font-mono text-gray-700">{cn.credit_note_number}</td>
                   <td className="px-4 py-3 text-gray-700">{cn.reason}</td>
                   <td className="px-4 py-3 text-right font-semibold text-red-600">
-                    {invoice.currency_code} {Number(cn.amount).toFixed(2)}
+                    {format(cn.amount)}
                   </td>
                   <td className="px-4 py-3">
                     <span className={`px-2 py-0.5 text-xs font-semibold rounded bg-purple-100 text-purple-800`}>

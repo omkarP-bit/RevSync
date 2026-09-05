@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface Subscription {
   id: number;
@@ -51,6 +52,7 @@ export default function SubscriptionsListPage() {
   const [total, setTotal] = useState(0);
   const [billingJobRunning, setBillingJobRunning] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const { format } = useCurrency();
 
   const fetchSubscriptions = async () => {
     setLoading(true);
@@ -92,10 +94,6 @@ export default function SubscriptionsListPage() {
     } finally {
       setBillingJobRunning(false);
     }
-  };
-
-  const formatCurrency = (amount: number, curr = "USD") => {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: curr }).format(amount);
   };
 
   const formatDate = (dateStr?: string) => {
@@ -161,7 +159,7 @@ export default function SubscriptionsListPage() {
         </div>
         <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-2xs">
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Active Monthly Value</span>
-          <div className="text-2xl font-bold text-indigo-600 mt-2">{formatCurrency(mrrTotal)}</div>
+          <div className="text-2xl font-bold text-indigo-600 mt-2">{format(mrrTotal)}</div>
         </div>
         <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-2xs">
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Engine Status</span>
@@ -236,7 +234,7 @@ export default function SubscriptionsListPage() {
                     </td>
                     <td className="px-5 py-4 text-gray-700 font-semibold">{sub.quantity}</td>
                     <td className="px-5 py-4 text-gray-900 font-bold">
-                      {formatCurrency(sub.recurring_amount, sub.currency)}
+                      {format(sub.recurring_amount)}
                     </td>
                     <td className="px-5 py-4">
                       <span className="inline-block px-2.5 py-0.5 text-2xs font-bold rounded-full bg-slate-100 text-slate-700 border border-slate-200">

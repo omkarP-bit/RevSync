@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
 import { exportFulfillmentPdf } from "@/lib/pdf";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 interface Allocation {
   id: number;
@@ -64,6 +65,7 @@ export default function FulfillmentDetailPage() {
   const [newWarehouse, setNewWarehouse] = useState("");
   const [newProduct, setNewProduct] = useState("");
   const [newQty, setNewQty] = useState("");
+  const { format } = useCurrency();
 
   const isFulfillmentManager = userRoleId === 4 || userRoleId === 5;
 
@@ -200,11 +202,11 @@ export default function FulfillmentDetailPage() {
           </div>
           <div className="bg-gray-50 p-3 rounded">
             <span className="text-gray-500 block">Grand Total</span>
-            <span className="text-sm font-bold text-gray-900">${Number(order.grand_total).toFixed(2)}</span>
+            <span className="text-sm font-bold text-gray-900">{format(order.grand_total)}</span>
           </div>
           <div className="bg-gray-50 p-3 rounded">
             <span className="text-gray-500 block">Shipping Cost</span>
-            <span className="text-sm font-bold text-gray-900">${Number(order.shipping_cost).toFixed(2)}</span>
+            <span className="text-sm font-bold text-gray-900">{format(order.shipping_cost)}</span>
           </div>
           <div className="bg-gray-50 p-3 rounded">
             <span className="text-gray-500 block">Backordered</span>
@@ -267,7 +269,7 @@ export default function FulfillmentDetailPage() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-right text-gray-600">
-                    ${Number(a.unit_shipping_cost).toFixed(2)}
+                    {format(a.unit_shipping_cost)}
                   </td>
                 </tr>
               ))}
