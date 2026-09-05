@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { query, withTransaction } from "../../database/pool.js";
 import { authenticate, requireRole, ROLES } from "../../middleware/auth.js";
 import { NotFoundError, ValidationError, UnprocessableEntityError, ConflictError, ForbiddenError } from "../../shared/errors.js";
-import { writeAuditLog } from "../../shared/audit.js";
+import { writeAuditLog, extractFinancialSnapshot, extractLineSnapshot } from "../../shared/audit.js";
 import { createSubscriptionsForQuotation } from "../../engines/subscription-engine.js";
 import { createFulfillmentForQuotation } from "../fulfillment/fulfillment-service.js";
 
@@ -83,6 +83,7 @@ const patchQuotationSchema = z.object({
   tax_rate_pct: z.coerce.number().nonnegative().optional(),
   order_discount_pct: z.coerce.number().min(0).max(100).optional(),
   notes: z.string().optional(),
+  reason: z.string().optional(),
 });
 
 const addLineSchema = z.object({
@@ -91,12 +92,16 @@ const addLineSchema = z.object({
   description: z.string().optional(),
   quantity: z.coerce.number().int().positive().default(1),
   applied_discount_pct: z.coerce.number().min(0).max(100).default(0),
+  reason: z.string().optional(),
 });
 
 const patchLineSchema = z.object({
   quantity: z.coerce.number().int().positive().optional(),
   applied_discount_pct: z.coerce.number().min(0).max(100).optional(),
+  unit_price: z.coerce.number().nonnegative().optional(),
+  product_variant_id: z.coerce.number().int().positive().nullable().optional(),
   description: z.string().optional(),
+  reason: z.string().optional(),
 });
 
 const submitSchema = z.object({
@@ -313,17 +318,23 @@ quotationsRouter.post("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES
       [quotationNumber, data.customer_id, userId, customer.currency_code, data.tax_rate_pct, data.notes || null]
     );
 
+    const row = insertResult.rows[0];
+    const initialSnapshot = extractFinancialSnapshot(row);
+
     await writeAuditLog({
       entityType: "quotations",
-      entityId: insertResult.rows[0].id,
+      entityId: row.id,
       action: "CREATED",
       before: null,
-      after: { quotation_number: quotationNumber, customer_id: data.customer_id, status: "DRAFT" },
+      after: {
+        quotation_number: quotationNumber,
+        customer_id: data.customer_id,
+        status: "DRAFT",
+        header: initialSnapshot,
+      },
       performedBy: userId,
       reason: "Quotation created",
     });
-
-    const row = insertResult.rows[0];
     res.status(201).json({
       data: {
         ...serializeHeader(row),
@@ -445,14 +456,38 @@ quotationsRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.S
       }
     }
 
+    const oldHeaderSnapshot = extractFinancialSnapshot(quote);
+
+    if (fields.customer_id && fields.customer_id !== quote.customer_id) {
+      await writeAuditLog({
+        entityType: "quotations",
+        entityId: realId,
+        action: "CUSTOMER_CHANGED",
+        before: { customer_id: quote.customer_id, header: oldHeaderSnapshot },
+        after: { customer_id: fields.customer_id },
+        performedBy: userId,
+        reason: fields.reason || "Customer changed",
+      });
+    }
+
     if (fields.customer_id) {
       const custRes = await query(`SELECT currency_code FROM customers WHERE id = $1`, [fields.customer_id]);
-      if (custRes.rows.length > 0) {
+      if (custRes.rows.length > 0 && custRes.rows[0].currency_code !== quote.currency_code) {
+        const oldCurr = quote.currency_code;
         await query(`UPDATE quotations SET currency_code = $1 WHERE id = $2`, [custRes.rows[0].currency_code, realId]);
+        await writeAuditLog({
+          entityType: "quotations",
+          entityId: realId,
+          action: "CURRENCY_CHANGED",
+          before: { currency_code: oldCurr, header: oldHeaderSnapshot },
+          after: { currency_code: custRes.rows[0].currency_code },
+          performedBy: userId,
+          reason: fields.reason || "Currency updated to match customer default",
+        });
       }
     }
 
-    const entries = Object.entries(fields).filter(([k, v]) => v !== undefined && k !== "status");
+    const entries = Object.entries(fields).filter(([k, v]) => v !== undefined && k !== "status" && k !== "reason");
     if (entries.length > 0) {
       const setClauses = entries.map(([k], i) => `${k} = $${i + 1}`);
       const values = entries.map(([, v]) => v);
@@ -462,7 +497,33 @@ quotationsRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.S
       );
     }
 
-    await recalculateAndPersistQuotation(realId);
+    const refreshed = await recalculateAndPersistQuotation(realId);
+    const newHeaderSnapshot = extractFinancialSnapshot(refreshed.header);
+
+    if (fields.order_discount_pct !== undefined && Number(fields.order_discount_pct) !== Number(quote.order_discount_pct || 0)) {
+      await writeAuditLog({
+        entityType: "quotations",
+        entityId: realId,
+        action: "ORDER_DISCOUNT_CHANGED",
+        before: { order_discount_pct: Number(quote.order_discount_pct || 0), header: oldHeaderSnapshot },
+        after: { order_discount_pct: Number(fields.order_discount_pct), header: newHeaderSnapshot },
+        performedBy: userId,
+        reason: fields.reason || `Order discount changed to ${fields.order_discount_pct}%`,
+      });
+    }
+
+    if (fields.tax_rate_pct !== undefined && Number(fields.tax_rate_pct) !== Number(quote.tax_rate_pct)) {
+      await writeAuditLog({
+        entityType: "quotations",
+        entityId: realId,
+        action: "TAX_CHANGED",
+        before: { tax_rate_pct: Number(quote.tax_rate_pct), header: oldHeaderSnapshot },
+        after: { tax_rate_pct: Number(fields.tax_rate_pct), header: newHeaderSnapshot },
+        performedBy: userId,
+        reason: fields.reason || `Tax rate changed to ${fields.tax_rate_pct}%`,
+      });
+    }
+
     const fullPayload = await getFullQuotationPayload(realId);
     res.json({ data: fullPayload });
   } catch (err) {
@@ -597,6 +658,8 @@ quotationsRouter.post("/:id/lines", requireRole(ROLES.ADMIN, ROLES.SALES_REP, RO
     const lineCost = qty * unitCost;
     const lineMargin = lineTotal - lineCost;
 
+    const oldHeaderSnapshot = extractFinancialSnapshot(quote);
+
     const insertResult = await query(
       `INSERT INTO quotation_lines
          (quotation_id, product_id, product_variant_id, description, quantity,
@@ -620,18 +683,36 @@ quotationsRouter.post("/:id/lines", requireRole(ROLES.ADMIN, ROLES.SALES_REP, RO
         lineMargin,
       ]
     );
+    const lineId = insertResult.rows[0].id;
+
+    const newLineSnapshot = extractLineSnapshot({
+      id: lineId,
+      product_id: data.product_id,
+      product_sku: product.sku || null,
+      product_name: product.name,
+      quantity: qty,
+      unit_price: unitPrice,
+      unit_cost: unitCost,
+      applied_discount_pct: discPct,
+      discount_amount: discAmt,
+      line_subtotal: subtotal,
+      line_total: lineTotal,
+      line_cost: lineCost,
+      line_margin: lineMargin,
+    });
 
     await writeAuditLog({
       entityType: "quotation_lines",
-      entityId: insertResult.rows[0].id,
+      entityId: lineId,
       action: "LINE_ADDED",
-      before: null,
-      after: { product_id: data.product_id, quantity: qty, applied_discount_pct: discPct },
+      before: { header: oldHeaderSnapshot, line: null },
+      after: { header: oldHeaderSnapshot, line: newLineSnapshot },
       performedBy: userId,
-      reason: "Line added",
+      reason: data.reason || "Line added",
     });
 
     const refreshed = await recalculateAndPersistQuotation(quote.id);
+
     if (refreshed.header.status === "PENDING_APPROVAL") {
       await reopenApprovalAfterEdit(quote.id, userId, refreshed);
     }
@@ -653,16 +734,23 @@ quotationsRouter.patch("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SALE
     assertQuotationNotConfirmed(quote.status);
     await handleCommercialMutationOnApproved(quote.id, quote.status, userId, "Line updated");
 
-    const lineCheck = await query(
-      `SELECT id FROM quotation_lines WHERE id = $1 AND quotation_id = $2`,
+    const oldLineRes = await query(
+      `SELECT ql.*, p.sku as product_sku, p.name as product_name
+       FROM quotation_lines ql
+       JOIN products p ON ql.product_id = p.id
+       WHERE ql.id = $1 AND ql.quotation_id = $2`,
       [lineId, quote.id]
     );
 
-    if (lineCheck.rows.length === 0) {
+    if (oldLineRes.rows.length === 0) {
       throw new NotFoundError("QuotationLine", lineId);
     }
 
-    const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
+    const oldLine = oldLineRes.rows[0];
+    const oldLineSnapshot = extractLineSnapshot(oldLine);
+    const oldHeaderSnapshot = extractFinancialSnapshot(quote);
+
+    const entries = Object.entries(fields).filter(([k, v]) => v !== undefined && k !== "reason");
     if (entries.length > 0) {
       const setClauses = entries.map(([k], i) => `${k} = $${i + 1}`);
       const values = entries.map(([, v]) => v);
@@ -673,17 +761,31 @@ quotationsRouter.patch("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SALE
       );
     }
 
+    const refreshed = await recalculateAndPersistQuotation(quote.id);
+    const newHeaderSnapshot = extractFinancialSnapshot(refreshed.header);
+    const newLineSnapshot = extractLineSnapshot({ ...oldLine, ...fields });
+
+    let action = "LINE_UPDATED";
+    if (fields.quantity !== undefined && Number(fields.quantity) !== Number(oldLine.quantity)) {
+      action = "QUANTITY_CHANGED";
+    } else if (fields.unit_price !== undefined && Number(fields.unit_price) !== Number(oldLine.unit_price)) {
+      action = "PRICE_CHANGED";
+    } else if (fields.applied_discount_pct !== undefined && Number(fields.applied_discount_pct) !== Number(oldLine.applied_discount_pct)) {
+      action = "LINE_DISCOUNT_CHANGED";
+    } else if (fields.product_variant_id !== undefined && Number(fields.product_variant_id) !== Number(oldLine.product_variant_id)) {
+      action = "VARIANT_CHANGED";
+    }
+
     await writeAuditLog({
       entityType: "quotation_lines",
       entityId: lineId,
-      action: "LINE_UPDATED",
-      before: null,
-      after: fields,
+      action,
+      before: { header: oldHeaderSnapshot, line: oldLineSnapshot },
+      after: { header: newHeaderSnapshot, line: newLineSnapshot },
       performedBy: userId,
-      reason: "Line updated",
+      reason: fields.reason || "Line updated",
     });
 
-    const refreshed = await recalculateAndPersistQuotation(quote.id);
     if (refreshed.header.status === "PENDING_APPROVAL") {
       await reopenApprovalAfterEdit(quote.id, userId, refreshed);
     }
@@ -704,26 +806,38 @@ quotationsRouter.delete("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SAL
     assertQuotationNotConfirmed(quote.status);
     await handleCommercialMutationOnApproved(quote.id, quote.status, userId, "Line deleted");
 
-    const result = await query(
-      `DELETE FROM quotation_lines WHERE id = $1 AND quotation_id = $2 RETURNING id`,
+    const oldLineRes = await query(
+      `SELECT ql.*, p.sku as product_sku, p.name as product_name
+       FROM quotation_lines ql
+       JOIN products p ON ql.product_id = p.id
+       WHERE ql.id = $1 AND ql.quotation_id = $2`,
       [lineId, quote.id]
     );
 
-    if (result.rows.length === 0) {
+    if (oldLineRes.rows.length === 0) {
       throw new NotFoundError("QuotationLine", lineId);
     }
+
+    const oldLineSnapshot = extractLineSnapshot(oldLineRes.rows[0]);
+    const oldHeaderSnapshot = extractFinancialSnapshot(quote);
+
+    await query(`DELETE FROM quotation_lines WHERE id = $1 AND quotation_id = $2`, [lineId, quote.id]);
+
+    const refreshed = await recalculateAndPersistQuotation(quote.id);
+    const newHeaderSnapshot = extractFinancialSnapshot(refreshed.header);
+
+    const reason = (req.body && req.body.reason) ? req.body.reason : "Line removed";
 
     await writeAuditLog({
       entityType: "quotation_lines",
       entityId: lineId,
-      action: "LINE_DELETED",
-      before: null,
-      after: null,
+      action: "LINE_REMOVED",
+      before: { header: oldHeaderSnapshot, line: oldLineSnapshot },
+      after: { header: newHeaderSnapshot, line: null },
       performedBy: userId,
-      reason: "Line removed",
+      reason,
     });
 
-    const refreshed = await recalculateAndPersistQuotation(quote.id);
     if (refreshed.header.status === "PENDING_APPROVAL") {
       await reopenApprovalAfterEdit(quote.id, userId, refreshed);
     }
@@ -867,6 +981,324 @@ quotationsRouter.post("/:id/cancel", requireRole(ROLES.ADMIN, ROLES.SALES_REP, R
 
     const fullPayload = await getFullQuotationPayload(quoteId);
     res.json({ data: fullPayload });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/v1/quotations/:id/timeline — unified Decision History timeline endpoint
+quotationsRouter.get("/:id/timeline", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const userId = (req as any).user.userId;
+    const userRole = Number((req as any).user.roleId);
+
+    const { quote } = await fetchQuoteContext(id);
+    const realId = Number(quote.id);
+
+    // RBAC Ownership Check
+    if (userRole === ROLES.SALES_REP && quote.sales_rep_id !== userId) {
+      const custCheck = await query(`SELECT sales_rep_id FROM customers WHERE id = $1`, [quote.customer_id]);
+      if (custCheck.rows.length === 0 || Number(custCheck.rows[0].sales_rep_id) !== userId) {
+        throw new ForbiddenError("You do not have permission to view the audit timeline for this quotation");
+      }
+    }
+
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 50));
+
+    // 1. Current Header & Customer Context
+    const headerRes = await query(
+      `SELECT q.*, c.name as customer_name, c.payment_terms, ct.name as tier_name
+       FROM quotations q
+       JOIN customers c ON q.customer_id = c.id
+       LEFT JOIN customer_tiers ct ON c.tier_id = ct.id
+       WHERE q.id = $1`,
+      [realId]
+    );
+    const currentHeader = headerRes.rows[0];
+
+    // Counts
+    const approvalCountRes = await query(`SELECT COUNT(*) FROM approval_requests WHERE quotation_id = $1`, [realId]);
+    const approvalCyclesCount = parseInt(approvalCountRes.rows[0].count);
+
+    const negCountRes = await query(
+      `SELECT COUNT(*) FROM negotiation_requests nr
+       JOIN negotiations n ON nr.negotiation_id = n.id
+       WHERE n.quotation_id = $1`,
+      [realId]
+    );
+    const negotiationRoundsCount = parseInt(negCountRes.rows[0].count);
+
+    // 2. Historical Original Values (only when reliably available from earliest audit log)
+    const creationAuditRes = await query(
+      `SELECT * FROM audit_logs
+       WHERE entity_type = 'quotations' AND entity_id = $1::text AND action IN ('CREATED', 'QUOTE_CREATED')
+       ORDER BY created_at ASC LIMIT 1`,
+      [realId]
+    );
+    let originalMetrics: any = null;
+    if (creationAuditRes.rows.length > 0 && creationAuditRes.rows[0].after?.header) {
+      const origHeader = creationAuditRes.rows[0].after.header;
+      originalMetrics = {
+        original_grand_total: Number(origHeader.grand_total || 0),
+        original_discount_total: Number(origHeader.discount_total || 0),
+        original_margin_pct: Number(origHeader.margin_pct || 0),
+        original_risk_level: origHeader.risk_level || "LOW",
+      };
+    }
+
+    // 3. Derived Decision Signals
+    const decisionSignals: Array<{ type: "warning" | "info" | "success"; text: string }> = [];
+    if (currentHeader.risk_level === "HIGH") {
+      decisionSignals.push({ type: "warning", text: "High Discount Risk" });
+    }
+    if (Number(currentHeader.total_overage) > 0) {
+      const overageVal = parseFloat(Number(currentHeader.total_overage).toFixed(2));
+      decisionSignals.push({ type: "warning", text: `Overage of ${overageVal}% over allowed tier discount` });
+    }
+    if (currentHeader.status === "PENDING_APPROVAL" || currentHeader.status === "PENDING_REAPPROVAL") {
+      decisionSignals.push({ type: "warning", text: "Approval Required" });
+    }
+    if (approvalCyclesCount > 1) {
+      decisionSignals.push({ type: "info", text: `${approvalCyclesCount} Approval Cycles` });
+    }
+    if (negotiationRoundsCount > 0) {
+      decisionSignals.push({ type: "info", text: `${negotiationRoundsCount} Customer Negotiation Request(s)` });
+    }
+    if (originalMetrics && Number(currentHeader.margin_pct) < originalMetrics.original_margin_pct) {
+      const drop = (originalMetrics.original_margin_pct - Number(currentHeader.margin_pct)).toFixed(1);
+      decisionSignals.push({ type: "warning", text: `Margin decreased by ${drop}%` });
+    }
+    if (currentHeader.status === "CONFIRMED") {
+      decisionSignals.push({ type: "success", text: "Quotation Confirmed" });
+    } else if (currentHeader.status === "APPROVED") {
+      decisionSignals.push({ type: "success", text: "Quotation Approved" });
+    }
+
+    // 4. Raw Audit Logs for Quotation and Linked Entities
+    const rawLogsRes = await query(
+      `SELECT a.*, (u.first_name || ' ' || u.last_name) as actor_name, r.name as actor_role
+       FROM audit_logs a
+       LEFT JOIN users u ON a.performed_by = u.id
+       LEFT JOIN roles r ON u.role_id = r.id
+       WHERE (a.entity_type = 'quotations' AND a.entity_id = $1::text)
+          OR (a.entity_type = 'quotation_lines' AND a.entity_id IN (SELECT id::text FROM quotation_lines WHERE quotation_id = $1::bigint))
+          OR (a.entity_type = 'approval_requests' AND a.entity_id IN (SELECT id::text FROM approval_requests WHERE quotation_id = $1::bigint))
+          OR (a.entity_type = 'fulfillment_orders' AND a.entity_id IN (SELECT id::text FROM fulfillment_orders WHERE quotation_id = $1::bigint))
+          OR (a.entity_type = 'subscriptions' AND a.entity_id IN (SELECT id::text FROM subscriptions WHERE quotation_id = $1::bigint))
+          OR (a.entity_type = 'invoices' AND a.entity_id IN (SELECT id::text FROM invoices WHERE quotation_id = $1::bigint))
+       ORDER BY a.created_at DESC`,
+      [realId]
+    );
+
+    // 5. Decided Approval Steps (for step notes & approver roles)
+    const approvalStepsRes = await query(
+      `SELECT s.*, r.name as role_name, (u.first_name || ' ' || u.last_name) as decider_name, req.quotation_id
+       FROM approval_steps s
+       JOIN approval_requests req ON s.approval_request_id = req.id
+       LEFT JOIN roles r ON s.role_id = r.id
+       LEFT JOIN users u ON s.decided_by = u.id
+       WHERE req.quotation_id = $1 AND s.status != 'PENDING'
+       ORDER BY s.decided_at DESC`,
+      [realId]
+    );
+
+    // 6. Build & Deduplicate Timeline Stream
+    const timelineItems: Array<{
+      id: string;
+      timestamp: string;
+      action: string;
+      category: "Pricing" | "Line Items" | "Approvals" | "Negotiations" | "Fulfillment" | "Billing" | "Status";
+      title: string;
+      description: string;
+      reason: string | null;
+      actor: { name: string; role: string } | null;
+      before: any;
+      after: any;
+      financial_impact: { before: any; after: any } | null;
+    }> = [];
+
+    const rawLogs = rawLogsRes.rows;
+    let currentSessionLogs: any[] = [];
+
+    function flushSession() {
+      if (currentSessionLogs.length === 0) return;
+      const first = currentSessionLogs[0];
+      const last = currentSessionLogs[currentSessionLogs.length - 1];
+      const count = currentSessionLogs.length;
+
+      let finBefore = first.before?.header || first.before?.line || null;
+      let finAfter = last.after?.header || last.after?.line || null;
+
+      const hasReopen = currentSessionLogs.some(l => l.action === "REOPENED");
+      const hasLineEdit = currentSessionLogs.some(l => [
+        "LINE_ADDED", "LINE_UPDATED", "LINE_REMOVED", "QUANTITY_CHANGED",
+        "PRICE_CHANGED", "LINE_DISCOUNT_CHANGED", "VARIANT_CHANGED", "LINE_UPDATED_BY_NEGOTIATION"
+      ].includes(l.action));
+
+      let category: "Pricing" | "Line Items" | "Approvals" | "Negotiations" | "Fulfillment" | "Billing" | "Status" = hasLineEdit ? "Line Items" : "Approvals";
+      let title = "Quotation Revised";
+
+      if (hasReopen && hasLineEdit) {
+        title = count > 1 ? `Quotation Revised & Re-opened (${count} updates)` : "Quotation Revised & Re-opened";
+        category = "Approvals";
+      } else if (hasLineEdit) {
+        title = count > 1 ? `Quotation Items & Pricing Revised (${count} updates)` : "Quotation Line Item Updated";
+        category = "Line Items";
+      } else if (hasReopen) {
+        title = "Quotation Re-opened for Approval";
+        category = "Approvals";
+      }
+
+      const reasons = currentSessionLogs
+        .map(l => l.reason)
+        .filter((v, i, self) => v && self.indexOf(v) === i);
+
+      timelineItems.push({
+        id: `session_${first.id}_${last.id}`,
+        timestamp: last.created_at,
+        action: hasReopen ? "REOPENED" : "LINE_ITEMS_REVISED",
+        category,
+        title,
+        description: reasons.length > 0 ? reasons.join("; ") : `${title} by ${first.actor_name || "User"}`,
+        reason: last.reason || null,
+        actor: first.performed_by ? { name: first.actor_name || "User", role: first.actor_role || "Staff" } : null,
+        before: first.before || null,
+        after: last.after || null,
+        financial_impact: (finBefore || finAfter) ? { before: finBefore, after: finAfter } : null,
+      });
+
+      currentSessionLogs = [];
+    }
+
+    for (const log of rawLogs) {
+      // Filter internal background engine logs
+      if (log.entity_type === "approval_requests" && ["CREATED", "CANCELLED"].includes(log.action)) {
+        continue;
+      }
+      if (log.action.startsWith("DECISION_")) continue;
+
+      const isSessionable = [
+        "LINE_ADDED", "LINE_UPDATED", "LINE_REMOVED", "QUANTITY_CHANGED",
+        "PRICE_CHANGED", "LINE_DISCOUNT_CHANGED", "VARIANT_CHANGED",
+        "LINE_UPDATED_BY_NEGOTIATION", "REOPENED"
+      ].includes(log.action);
+
+      if (isSessionable) {
+        if (currentSessionLogs.length > 0) {
+          const prev = currentSessionLogs[currentSessionLogs.length - 1];
+          const timeDiffMs = new Date(log.created_at).getTime() - new Date(prev.created_at).getTime();
+          if (prev.performed_by === log.performed_by && timeDiffMs < 10 * 60 * 1000) {
+            currentSessionLogs.push(log);
+            continue;
+          } else {
+            flushSession();
+          }
+        }
+        currentSessionLogs.push(log);
+      } else {
+        flushSession();
+
+        let category: "Pricing" | "Line Items" | "Approvals" | "Negotiations" | "Fulfillment" | "Billing" | "Status" = "Status";
+        let title = log.action.replace(/_/g, " ");
+
+        if (log.action === "CREATED" || log.action === "QUOTE_CREATED") {
+          title = "Quotation Created";
+          category = "Status";
+        } else if (log.action === "SUBMITTED") {
+          title = "Submitted for Manager Approval";
+          category = "Approvals";
+        } else if (log.action === "APPROVED") {
+          title = "Quotation Approved";
+          category = "Approvals";
+        } else if (log.action.includes("NEGOTIATION")) {
+          title = log.action === "NEGOTIATION" ? "Customer Requested Negotiation" : "Negotiation Resolved";
+          category = "Negotiations";
+        } else if (log.action === "CONFIRMED") {
+          title = "Quotation Confirmed & Accepted by Customer";
+          category = "Status";
+        } else if (log.action.includes("SUBSCRIPTION")) {
+          title = "Subscription Created";
+          category = "Billing";
+        } else if (log.action.includes("INVOICE")) {
+          title = "Invoice Issued";
+          category = "Billing";
+        }
+
+        let finBefore = log.before?.header || null;
+        let finAfter = log.after?.header || null;
+
+        timelineItems.push({
+          id: `audit_${log.id}`,
+          timestamp: log.created_at,
+          action: log.action,
+          category,
+          title,
+          description: log.reason || `${title} completed`,
+          reason: log.reason || null,
+          actor: log.performed_by ? { name: log.actor_name || "User", role: log.actor_role || "Staff" } : null,
+          before: log.before || null,
+          after: log.after || null,
+          financial_impact: (finBefore || finAfter) ? { before: finBefore, after: finAfter } : null,
+        });
+      }
+    }
+
+    flushSession();
+
+    for (const step of approvalStepsRes.rows) {
+      timelineItems.push({
+        id: `step_${step.id}`,
+        timestamp: step.decided_at,
+        action: step.status,
+        category: "Approvals",
+        title: `Approval Step ${step.sequence}: ${step.status}`,
+        description: step.notes ? `Reason: "${step.notes}"` : `Decided by ${step.decider_name || "Approver"} (${step.role_name || "Approver"})`,
+        reason: step.notes || null,
+        actor: { name: step.decider_name || "Approver", role: step.role_name || "Approver" },
+        before: null,
+        after: { status: step.status },
+        financial_impact: null,
+      });
+    }
+
+    timelineItems.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    const total = timelineItems.length;
+    const offset = (page - 1) * limit;
+    const pagedItems = timelineItems.slice(offset, offset + limit);
+
+    res.json({
+      data: {
+        decision_context: {
+          current: {
+            grand_total: Number(currentHeader.grand_total),
+            discount_total: Number(currentHeader.discount_total),
+            order_discount_pct: Number(currentHeader.order_discount_pct || 0),
+            margin_pct: Number(currentHeader.margin_pct),
+            risk_level: currentHeader.risk_level,
+            total_overage: Number(currentHeader.total_overage),
+            currency_code: currentHeader.currency_code,
+            status: currentHeader.status,
+            customer_name: currentHeader.customer_name,
+            tier_name: currentHeader.tier_name,
+            payment_terms: currentHeader.payment_terms,
+            approval_cycles_count: approvalCyclesCount,
+            negotiation_rounds_count: negotiationRoundsCount,
+          },
+          historical: originalMetrics,
+        },
+        decision_signals: decisionSignals,
+        timeline: pagedItems,
+      },
+      meta: {
+        page,
+        limit,
+        total,
+        total_pages: Math.ceil(total / limit),
+      },
+    });
   } catch (err) {
     next(err);
   }
