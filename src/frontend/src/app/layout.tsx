@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "DealFlow360",
+  title: "RevSync",
   description: "Quote-to-Cash orchestration platform",
 };
 

@@ -34,7 +34,7 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
     }
 
     const config = loadConfig();
-    const tokenPayload = { userId: user.id, roleId: user.role_id, email: user.email };
+    const tokenPayload = { userId: Number(user.id), roleId: Number(user.role_id), email: user.email };
     const accessToken = jwt.sign(tokenPayload, config.JWT_SECRET, {
       expiresIn: config.JWT_EXPIRES_IN as any,
     });
@@ -46,7 +46,7 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
       data: {
         access_token: accessToken,
         refresh_token: refreshToken,
-        user: { id: user.id, email: user.email, role_id: user.role_id, role_name: user.role_name },
+        user: { id: Number(user.id), email: user.email, role_id: Number(user.role_id), role_name: user.role_name },
       },
     });
   } catch (err) {

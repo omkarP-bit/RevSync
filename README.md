@@ -1,8 +1,8 @@
-# DealFlow360
+# RevSync
 
 **A rule-driven, self-governing Quote-to-Cash orchestration platform for B2B sales.**
 
-DealFlow360 manages the complete sales lifecycle — from quotation to cash — for a single company operating in multiple currencies. Every decision the system makes (discount risk, approval routing, warehouse allocation, upsell suggestions, deal health, subscription billing) is driven by **transparent, deterministic rules and mathematics**, not AI/ML. That makes every outcome explainable and auditable.
+RevSync manages the complete sales lifecycle — from quotation to cash — for a single company operating in multiple currencies. Every decision the system makes (discount risk, approval routing, warehouse allocation, upsell suggestions, deal health, subscription billing) is driven by **transparent, deterministic rules and mathematics**, not AI/ML. That makes every outcome explainable and auditable.
 
 ```
 Quotation → Pricing → Discount Risk Evaluation → Approval → Customer Negotiation
@@ -12,9 +12,9 @@ Quotation → Pricing → Discount Risk Evaluation → Approval → Customer Neg
 
 ---
 
-## Why DealFlow360
+## Why RevSync
 
-Most quote-to-cash tools either lock discounting/approval logic into rigid hardcoded rules, or lean on opaque ML scoring that's hard to explain to a sales manager or an auditor. DealFlow360 takes a third path: **every business rule is configuration, every outcome is a traceable calculation.**
+Most quote-to-cash tools either lock discounting/approval logic into rigid hardcoded rules, or lean on opaque ML scoring that's hard to explain to a sales manager or an auditor. RevSync takes a third path: **every business rule is configuration, every outcome is a traceable calculation.**
 
 - A discount is flagged HIGH risk because `overage = max(0, applied − allowed) = 8`, and that's shown to the user — not inferred by a model.
 - An approval chain runs because a configured rule maps `HIGH risk → Sales Manager → Finance` — not because of a black-box score.
@@ -79,7 +79,7 @@ src/
 
 ```bash
 git clone <repo-url>
-cd dealflow360
+cd revsync
 docker compose up
 ```
 
@@ -99,6 +99,6 @@ This starts PostgreSQL, the backend API, and the React frontend together. On fir
 
 ## Design Principle
 
-> DealFlow360 is not "an AI that manages sales." It is a **deterministic business-rule engine** that automatically coordinates pricing, approval, negotiation, fulfillment, and billing across the quote-to-cash lifecycle — including a durable customer credit wallet for subscription cancellations.
+> RevSync is not "an AI that manages sales." It is a **deterministic business-rule engine** that automatically coordinates pricing, approval, negotiation, fulfillment, and billing across the quote-to-cash lifecycle — including a durable customer credit wallet for subscription cancellations.
 
 That's what keeps the system explainable to a sales manager, auditable by Finance, and straightforward to demo end-to-end.

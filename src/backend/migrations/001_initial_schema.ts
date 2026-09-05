@@ -1,4 +1,4 @@
-import { MigrationBuilder } from "node-pg-migrate";
+import type { MigrationBuilder } from "node-pg-migrate";
 
 export async function up(pgm: MigrationBuilder): Promise<void> {
   // Enable extensions
@@ -42,7 +42,7 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
     id: { type: "BIGSERIAL", primaryKey: true },
     name: { type: "VARCHAR(100)", notNull: true, unique: true },
     description: { type: "TEXT" },
-    discount_ceiling_pct: { type: "NUMERIC(5,2)", notNull: true, default: pgm.raw("0") },
+    discount_ceiling_pct: { type: "NUMERIC(5,2)", notNull: true, default: "0" },
     created_at: { type: "TIMESTAMPTZ", notNull: true, default: pgm.func("NOW()") },
   });
 

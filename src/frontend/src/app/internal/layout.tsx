@@ -37,7 +37,7 @@ export default function InternalLayout({ children }: { children: React.ReactNode
         <div className="flex items-center justify-between max-w-7xl mx-auto">
           <div className="flex items-center gap-6">
             <Link href="/internal" className="text-xl font-bold text-blue-600">
-              DealFlow360
+              RevSync
             </Link>
             <div className="hidden md:flex gap-1">
               {navItems.map((item) => (

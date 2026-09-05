@@ -40,7 +40,8 @@ export function requireRole(...roleIds: number[]) {
     if (!req.user) {
       return next(new UnauthorizedError());
     }
-    if (roleIds.length > 0 && !roleIds.includes(req.user.roleId)) {
+    const userRoleId = Number(req.user.roleId);
+    if (roleIds.length > 0 && !roleIds.includes(userRoleId)) {
       return next(new ForbiddenError("Insufficient permissions"));
     }
     next();

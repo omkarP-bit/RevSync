@@ -13,7 +13,7 @@ export function getLogger(): winston.Logger {
       winston.format.errors({ stack: true }),
       winston.format.json()
     ),
-    defaultMeta: { service: "dealflow360-backend" },
+    defaultMeta: { service: "revsync-backend" },
     transports: [new winston.transports.Console()],
   });
   return _logger;

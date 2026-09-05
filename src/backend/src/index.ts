@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -13,6 +14,9 @@ import { authRouter } from "./modules/auth/auth.routes.js";
 import { customersRouter } from "./modules/customers/customers.routes.js";
 import { categoriesRouter } from "./modules/categories/categories.routes.js";
 import { currenciesRouter } from "./modules/currencies/currencies.routes.js";
+import { productsRouter } from "./modules/products/products.routes.js";
+import { pricingRouter } from "./modules/pricing/pricing.routes.js";
+import { quotationsRouter } from "./modules/quotations/quotations.routes.js";
 
 async function main() {
   const config = loadConfig();
@@ -41,11 +45,14 @@ async function main() {
   app.use("/api/v1/customers", customersRouter);
   app.use("/api/v1/categories", categoriesRouter);
   app.use("/api/v1/currencies", currenciesRouter);
+  app.use("/api/v1/products", productsRouter);
+  app.use("/api/v1/pricelists", pricingRouter);
+  app.use("/api/v1/quotations", quotationsRouter);
 
   app.use(errorHandler);
 
   app.listen(config.PORT, () => {
-    logger.info(`DealFlow360 backend running on port ${config.PORT}`);
+    logger.info(`RevSync backend running on port ${config.PORT}`);
   });
 }
 
