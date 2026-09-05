@@ -147,12 +147,31 @@ describe("Warehouses routes", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data[0]).toMatchObject({ quantity_on_hand: 12, product_id: 1 });
+    // Only inventory-tracked (physical) products may be listed per region.
+    expect(String(vi.mocked(db.query).mock.calls[2][0])).toContain("track_inventory = true");
+  });
+
+  it("POST /api/v1/warehouses/:id/inventory rejects software/digital products", async () => {
+    vi.mocked(db.query)
+      .mockResolvedValueOnce(oneRow([{ name: "Mumbai Main" }])) // warehouse exists
+      .mockResolvedValueOnce(oneRow([{ name: "RevSync Enterprise Platform", track_inventory: false }])); // product is untracked
+
+    const res = await request(app)
+      .post("/api/v1/warehouses/1/inventory")
+      .set("Authorization", `Bearer ${warehouseToken}`)
+      .send({ product_id: 1, quantity_on_hand: 12, reorder_threshold: 3 });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error.message).toContain("not tracked in inventory");
+    // The upsert must never run for an untracked product.
+    const upserts = vi.mocked(db.query).mock.calls.filter((c) => String(c[0]).includes("INSERT INTO inventory_items"));
+    expect(upserts).toHaveLength(0);
   });
 
   it("POST /api/v1/warehouses/:id/inventory upserts stock level", async () => {
     vi.mocked(db.query)
       .mockResolvedValueOnce(oneRow([{ name: "Mumbai Main" }])) // warehouse exists
-      .mockResolvedValueOnce(oneRow([{ name: "Enterprise Platform" }])) // product exists
+      .mockResolvedValueOnce(oneRow([{ name: "Enterprise Platform", track_inventory: true }])) // product exists
       .mockResolvedValueOnce(oneRow([])) // before (no existing row)
       .mockResolvedValueOnce(oneRow([{ ...inventoryRow, id: "9" }])) // upsert
       .mockResolvedValueOnce(oneRow([])); // audit
@@ -201,8 +220,8 @@ describe("Fulfillment routes", () => {
       .mockResolvedValueOnce(oneRow([{ id: "7", status: "CONFIRMED" }])) // quote
       .mockResolvedValueOnce(oneRow([])) // existing order
       .mockResolvedValueOnce(oneRow([
-        { quotation_line_id: "1", product_id: "1", quantity: "3" },
-        { quotation_line_id: "2", product_id: "2", quantity: "2" },
+        { quotation_line_id: "1", product_id: "1", quantity: "3", track_inventory: true },
+        { quotation_line_id: "2", product_id: "2", quantity: "2", track_inventory: true },
       ])) // lines
       .mockResolvedValueOnce(oneRow([
         { id: "1", base_shipping_cost: "5.00" },
@@ -239,7 +258,7 @@ describe("Fulfillment routes", () => {
       .mockResolvedValueOnce(oneRow([{ id: "7", status: "CONFIRMED" }])) // quote
       .mockResolvedValueOnce(oneRow([])) // existing order
       .mockResolvedValueOnce(oneRow([
-        { quotation_line_id: "1", product_id: "1", quantity: "10" },
+        { quotation_line_id: "1", product_id: "1", quantity: "10", track_inventory: true },
       ])) // lines
       .mockResolvedValueOnce(oneRow([
         { id: "1", base_shipping_cost: "5.00" },
@@ -267,13 +286,40 @@ describe("Fulfillment routes", () => {
     expect(res.body.data.backordered_quantity).toBe(3);
   });
 
+  it("POST /api/v1/fulfillment never allocates or backorders digital (non-inventory) products", async () => {
+    vi.mocked(db.query)
+      .mockResolvedValueOnce(oneRow([{ id: "7", status: "CONFIRMED" }])) // quote
+      .mockResolvedValueOnce(oneRow([])) // existing order
+      .mockResolvedValueOnce(oneRow([
+        { quotation_line_id: "1", product_id: "1", quantity: "3", track_inventory: false },
+      ])) // lines (software — not tracked)
+      .mockResolvedValueOnce(oneRow([{ id: "1", status: "ALLOCATED", shipping_cost: "0.00", backordered_quantity: 0 }])) // insert order
+      .mockResolvedValueOnce(oneRow([])) // audit
+      .mockResolvedValueOnce(oneRow([{ ...orderRow, status: "ALLOCATED", backordered_quantity: "0", shipping_cost: "0.00" }])) // loadOrder header
+      .mockResolvedValueOnce(oneRow([])); // loadOrder allocations
+
+    const res = await request(app)
+      .post("/api/v1/fulfillment")
+      .set("Authorization", `Bearer ${warehouseToken}`)
+      .send({ quotation_id: 7 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.status).toBe("ALLOCATED");
+    expect(res.body.data.allocations).toHaveLength(0);
+    expect(res.body.data.backordered_quantity).toBe(0);
+    expect(res.body.data.shipping_cost).toBe(0);
+    // A purely digital order needs no warehouse/stock lookups at all.
+    const warehouseQueries = vi.mocked(db.query).mock.calls.filter((c) => String(c[0]).includes("FROM warehouses"));
+    expect(warehouseQueries).toHaveLength(0);
+  });
+
   it("POST /api/v1/fulfillment/:id/override replaces allocations manually", async () => {
     vi.mocked(db.query)
       .mockResolvedValueOnce(oneRow([{ id: "1", status: "ALLOCATED", quotation_id: "7" }])) // order
       .mockResolvedValueOnce(oneRow([{ product_id: "1", requested: 5 }])) // requested totals
       .mockResolvedValueOnce(oneRow([{ id: "1", product_id: "1", warehouse_id: "1", quantity: 2, quotation_line_id: "1" }])) // current allocations
       .mockResolvedValueOnce(oneRow([{ id: "2" }])) // active warehouses
-      .mockResolvedValueOnce(oneRow([{ id: "1", product_id: "1" }])) // line id by product
+      .mockResolvedValueOnce(oneRow([{ id: "1", product_id: "1", track_inventory: true }])) // line id by product
       .mockResolvedValueOnce(oneRow([])) // insert new allocation (p1 x W2)
       .mockResolvedValueOnce(oneRow([{ allocated: 4, cnt: 2 }])) // recalc
       .mockResolvedValueOnce(oneRow([{ total: "15.00" }])) // shipping total
@@ -303,7 +349,7 @@ describe("Fulfillment routes", () => {
         { id: "2", product_id: "1", warehouse_id: "3", quantity: 2, quotation_line_id: "1" },
       ])) // current allocations
       .mockResolvedValueOnce(oneRow([{ id: "1" }, { id: "3" }])) // active warehouses
-      .mockResolvedValueOnce(oneRow([{ id: "1", product_id: "1" }])) // line id by product
+      .mockResolvedValueOnce(oneRow([{ id: "1", product_id: "1", track_inventory: true }])) // line id by product
       .mockResolvedValueOnce(oneRow([])) // update MUM -> 3
       .mockResolvedValueOnce(oneRow([])) // delete BLR
       .mockResolvedValueOnce(oneRow([{ allocated: 3, cnt: 1 }])) // recalc
@@ -333,7 +379,7 @@ describe("Fulfillment routes", () => {
       .mockResolvedValueOnce(oneRow([{ product_id: "1", requested: 5 }])) // requested totals
       .mockResolvedValueOnce(oneRow([{ id: "1", product_id: "1", warehouse_id: "1", quantity: 5, quotation_line_id: "1" }])) // current allocations
       .mockResolvedValueOnce(oneRow([{ id: "2" }])) // active warehouses
-      .mockResolvedValueOnce(oneRow([{ id: "1", product_id: "1" }])); // line id by product
+      .mockResolvedValueOnce(oneRow([{ id: "1", product_id: "1", track_inventory: true }])); // line id by product
 
     const res = await request(app)
       .post("/api/v1/fulfillment/1/override")

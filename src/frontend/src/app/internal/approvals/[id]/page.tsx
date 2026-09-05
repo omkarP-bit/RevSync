@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
+import { exportApprovalPdf } from "@/lib/pdf";
 
 interface ApprovalStep {
   id: number;
@@ -119,6 +120,12 @@ export default function ApprovalDetailPage() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => exportApprovalPdf(approval)}
+            className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-50 text-sm font-medium"
+          >
+            ⬇ Export PDF
+          </button>
           <span className={`px-2 py-1 text-xs font-semibold rounded ${riskStyles[approval.risk_level] || "bg-gray-100 text-gray-700"}`}>
             {approval.risk_level} RISK
           </span>

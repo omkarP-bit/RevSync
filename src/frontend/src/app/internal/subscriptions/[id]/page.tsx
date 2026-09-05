@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
+import { exportSubscriptionPdf } from "@/lib/pdf";
 
 interface Plan {
   id: number;
@@ -234,6 +235,12 @@ export default function SubscriptionDetailPage() {
         >
           ← Back to Subscriptions
         </Link>
+        <button
+          onClick={() => exportSubscriptionPdf(sub)}
+          className="px-3 py-2 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-2xs"
+        >
+          ⬇ Export PDF
+        </button>
 
       </div>
 

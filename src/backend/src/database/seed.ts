@@ -272,9 +272,9 @@ async function seed() {
   for (const p of productsToSeed) {
     const categoryId = categoryMap.get(p.category)!;
     const prodRes = await query(
-      `INSERT INTO products (sku, name, description, category_id, product_type, base_cost, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, true) RETURNING id`,
-      [p.sku, p.name, p.description, categoryId, p.product_type, p.base_cost]
+      `INSERT INTO products (sku, name, description, category_id, product_type, base_cost, is_active, track_inventory)
+       VALUES ($1, $2, $3, $4, $5, $6, true, $7) RETURNING id`,
+      [p.sku, p.name, p.description, categoryId, p.product_type, p.base_cost, p.category === "Hardware & Devices"]
     );
     const prodId = Number(prodRes.rows[0].id);
     productMap.set(p.sku, prodId);

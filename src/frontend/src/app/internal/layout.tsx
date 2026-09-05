@@ -11,7 +11,7 @@ interface User {
   role_name: string;
 }
 
-const navItems = [
+const navItems: { label: string; href: string; adminOnly?: boolean; roles?: number[] }[] = [
   { label: "Dashboard", href: "/internal", adminOnly: false },
   { label: "Quotations", href: "/internal/quotations", adminOnly: false },
   { label: "Approvals", href: "/internal/approvals", adminOnly: false },
@@ -19,7 +19,7 @@ const navItems = [
   { label: "Fulfillment", href: "/internal/fulfillment", adminOnly: false },
   { label: "Subscriptions", href: "/internal/subscriptions", adminOnly: false },
   { label: "Invoices", href: "/internal/invoices", adminOnly: false },
-  { label: "Deal Health", href: "/internal/deal-health", adminOnly: false },
+  { label: "Deal Health", href: "/internal/deal-health", roles: [2, 3, 5] },
   { label: "Reports", href: "/internal/reports", adminOnly: false },
   { label: "Admin", href: "/admin", adminOnly: true },
 ];
@@ -43,7 +43,10 @@ export default function InternalLayout({ children }: { children: React.ReactNode
   // Sales Representative (Role 1) is blocked from accessing Admin
   const canAccessAdmin = Number(user.role_id) !== 1;
 
-  const filteredNavItems = navItems.filter((item) => !item.adminOnly || canAccessAdmin);
+  const filteredNavItems = navItems.filter(
+    (item) =>
+      (!item.adminOnly || canAccessAdmin) && (!item.roles || item.roles.includes(Number(user.role_id)))
+  );
 
   return (
     <div className="min-h-screen bg-gray-50">

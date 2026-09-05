@@ -20,6 +20,40 @@ const exchangeRateSchema = z.object({
   rate: z.number().positive(),
 });
 
+currenciesRouter.get("/rates", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.SALES_REP, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const base = String((req.query.base as string) || "USD").toUpperCase();
+
+    const result = await query(
+      `SELECT c.code, c.name, c.symbol, c.is_active,
+              COALESCE(er.rate, 1) AS rate
+       FROM currencies c
+       LEFT JOIN LATERAL (
+         SELECT rate FROM exchange_rates
+         WHERE from_currency_code = $1 AND to_currency_code = c.code
+         ORDER BY effective_at DESC
+         LIMIT 1
+       ) er ON true
+       WHERE c.is_active = true
+       ORDER BY c.code ASC`,
+      [base]
+    );
+
+    const currencies: Record<string, { name: string; symbol: string; rate: number }> = {};
+    for (const row of result.rows) {
+      currencies[row.code] = {
+        name: row.name,
+        symbol: row.symbol,
+        rate: Number(row.rate) || 1,
+      };
+    }
+
+    res.json({ data: { base_currency: base, currencies } });
+  } catch (err) {
+    next(err);
+  }
+});
+
 currenciesRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);

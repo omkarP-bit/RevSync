@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
+import { exportInvoicePdf } from "@/lib/pdf";
 
 interface InvoiceLine {
   id: number;
@@ -200,12 +201,20 @@ export default function InvoiceDetailPage() {
               Issued {new Date(invoice.issue_date).toLocaleDateString()} · Due {new Date(invoice.due_date).toLocaleDateString()}
             </p>
           </div>
-          <Link
-            href={`/internal/quotations/${invoice.quotation_id}`}
-            className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm font-medium"
-          >
-            Open Quotation →
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => exportInvoicePdf(invoice)}
+              className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-50 text-sm font-medium"
+            >
+              ⬇ Export PDF
+            </button>
+            <Link
+              href={`/internal/quotations/${invoice.quotation_id}`}
+              className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm font-medium"
+            >
+              Open Quotation →
+            </Link>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t border-gray-100 text-xs">

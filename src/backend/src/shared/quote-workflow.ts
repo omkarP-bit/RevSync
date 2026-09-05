@@ -12,7 +12,7 @@ import { mapRiskLevel, selectRiskRule, buildSteps, RiskLevel } from "../engines/
 export async function fetchQuoteContext(quotationId: string | number): Promise<{ isNumeric: boolean; quote: any }> {
   const isNumeric = typeof quotationId === "number" || /^\d+$/.test(String(quotationId));
   const quoteResult = await query(
-    `SELECT q.id, q.customer_id, q.currency_code, q.tax_rate_pct, q.order_discount_pct, q.status, c.tier_id as customer_tier_id
+    `SELECT q.id, q.customer_id, q.currency_code, q.tax_rate_pct, q.order_discount_pct, q.status, c.tier_id as customer_tier_id, c.payment_terms
      FROM quotations q
      JOIN customers c ON q.customer_id = c.id
      WHERE ${isNumeric ? "q.id = $1" : "q.public_id::text = $1"}`,

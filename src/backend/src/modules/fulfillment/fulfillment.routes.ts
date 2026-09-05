@@ -3,8 +3,9 @@ import { query } from "../../database/pool.js";
 import { authenticate, requireRole, ROLES } from "../../middleware/auth.js";
 import { ConflictError, NotFoundError, UnprocessableEntityError, ValidationError } from "../../shared/errors.js";
 import { writeAuditLog } from "../../shared/audit.js";
-import { allocateFulfillment, computeFulfillmentStatus, WarehouseContext } from "../../engines/fulfillment-engine.js";
+import { computeFulfillmentStatus } from "../../engines/fulfillment-engine.js";
 import { z } from "zod";
+import { createFulfillmentForQuotation } from "./fulfillment-service.js";
 
 export const warehousesRouter = Router();
 warehousesRouter.use(authenticate);
@@ -196,7 +197,9 @@ warehousesRouter.get("/:id/inventory", requireRole(ROLES.ADMIN, ROLES.WAREHOUSE_
     }
 
     const countResult = await query(
-      `SELECT COUNT(*) FROM inventory_items ii WHERE ii.warehouse_id = $1`,
+      `SELECT COUNT(*) FROM inventory_items ii
+       JOIN products p ON ii.product_id = p.id
+       WHERE ii.warehouse_id = $1 AND p.track_inventory = true`,
       [id]
     );
     const total = parseInt(countResult.rows[0].count);
@@ -206,7 +209,7 @@ warehousesRouter.get("/:id/inventory", requireRole(ROLES.ADMIN, ROLES.WAREHOUSE_
               ii.quantity_on_hand, ii.reorder_threshold, ii.updated_at
        FROM inventory_items ii
        JOIN products p ON ii.product_id = p.id
-       WHERE ii.warehouse_id = $1
+       WHERE ii.warehouse_id = $1 AND p.track_inventory = true
        ORDER BY p.name ASC
        LIMIT $2 OFFSET $3`,
       [id, limit, offset]
@@ -238,9 +241,14 @@ warehousesRouter.post("/:id/inventory", requireRole(ROLES.ADMIN, ROLES.WAREHOUSE
     if (warehouseCheck.rows.length === 0) {
       throw new NotFoundError("Warehouse", id);
     }
-    const productCheck = await query(`SELECT name FROM products WHERE id = $1`, [data.product_id]);
+    const productCheck = await query(`SELECT name, track_inventory FROM products WHERE id = $1`, [data.product_id]);
     if (productCheck.rows.length === 0) {
       throw new NotFoundError("Product", data.product_id);
+    }
+    if (!productCheck.rows[0].track_inventory) {
+      throw new UnprocessableEntityError(
+        `"${productCheck.rows[0].name}" is not tracked in inventory (software/digital products are excluded from per-region stock)`
+      );
     }
 
     const before = await query(
@@ -431,114 +439,11 @@ fulfillmentRouter.post("/", requireRole(ROLES.ADMIN, ROLES.WAREHOUSE_MANAGER), a
       throw new UnprocessableEntityError("Only CONFIRMED quotations can be fulfilled");
     }
 
-    const existing = await query(
-      `SELECT id FROM fulfillment_orders WHERE quotation_id = $1`,
-      [data.quotation_id]
-    );
-    if (existing.rows.length > 0) {
-      throw new ConflictError("A fulfillment order already exists for this quotation");
-    }
-
-    const linesResult = await query(
-      `SELECT id AS quotation_line_id, product_id, quantity
-       FROM quotation_lines
-       WHERE quotation_id = $1
-       ORDER BY id ASC`,
-      [data.quotation_id]
-    );
-    if (linesResult.rows.length === 0) {
-      throw new UnprocessableEntityError("Quotation has no lines to fulfill");
-    }
-
-    const warehousesResult = await query(
-      `SELECT id, base_shipping_cost FROM warehouses WHERE is_active = true ORDER BY id ASC`
-    );
-    if (warehousesResult.rows.length === 0) {
-      throw new UnprocessableEntityError("No active warehouses configured");
-    }
-
-    const inventoryResult = await query(
-      `SELECT product_id, warehouse_id, quantity_on_hand
-       FROM inventory_items
-       WHERE warehouse_id = ANY($1::bigint[]) AND quantity_on_hand > 0`,
-      [warehousesResult.rows.map((r: any) => Number(r.id))]
-    );
-
-    const countResult = await query(
-      `SELECT warehouse_id, COUNT(*)::int AS cnt
-       FROM fulfillment_allocations
-       GROUP BY warehouse_id`
-    );
-    const shipmentCounts = new Map<number, number>(
-      countResult.rows.map((r: any) => [Number(r.warehouse_id), Number(r.cnt)])
-    );
-
-    const warehouseContexts: WarehouseContext[] = warehousesResult.rows.map((w: any) => {
-      const wid = Number(w.id);
-      const stock: Record<number, number> = {};
-      for (const inv of inventoryResult.rows as any[]) {
-        if (Number(inv.warehouse_id) === wid) {
-          stock[Number(inv.product_id)] = Number(inv.quantity_on_hand);
-        }
-      }
-      return {
-        id: wid,
-        shippingCost: Number(w.base_shipping_cost),
-        shipmentCount: shipmentCounts.get(wid) ?? 0,
-        stock,
-      };
+    const result = await createFulfillmentForQuotation(query, data.quotation_id, userId, {
+      notes: data.notes ?? null,
     });
 
-    const outcome = allocateFulfillment(
-      linesResult.rows.map((r: any) => ({
-        quotationLineId: Number(r.quotation_line_id),
-        productId: Number(r.product_id),
-        quantity: Number(r.quantity),
-      })),
-      warehouseContexts
-    );
-
-    const status = computeFulfillmentStatus(outcome.allocatedQuantity, outcome.backorderedQuantity);
-    const shippingCost = outcome.allocations.reduce(
-      (sum, line) => sum + Number(line.unitShippingCost) * line.quantity,
-      0
-    );
-
-    const orderResult = await query(
-      `INSERT INTO fulfillment_orders
-         (quotation_id, status, shipping_cost, backordered_quantity, created_by, notes)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, status, shipping_cost, backordered_quantity`,
-      [data.quotation_id, status, shippingCost.toFixed(2), outcome.backorderedQuantity, userId, data.notes ?? null]
-    );
-
-    const order = orderResult.rows[0];
-
-    for (const line of outcome.allocations) {
-      await query(
-        `INSERT INTO fulfillment_allocations
-           (fulfillment_order_id, quotation_line_id, product_id, warehouse_id, quantity, unit_shipping_cost)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [Number(order.id), line.quotationLineId, line.productId, line.warehouseId, line.quantity, line.unitShippingCost.toFixed(2)]
-      );
-    }
-
-    await writeAuditLog({
-      entityType: "fulfillment_orders",
-      entityId: order.id,
-      action: "FULFILLMENT_CREATED",
-      before: null,
-      after: {
-        status,
-        shipping_cost: Number(shippingCost.toFixed(2)),
-        backordered_quantity: Number(outcome.backorderedQuantity),
-        allocation_count: outcome.allocations.length,
-      },
-      performedBy: userId,
-      reason: "Auto-allocated from confirmed quotation",
-    });
-
-    res.status(201).json({ data: await loadOrder(String(order.id)) });
+    res.status(201).json({ data: await loadOrder(String(result.orderId)) });
   } catch (err) {
     next(err);
   }
@@ -597,14 +502,18 @@ fulfillmentRouter.post("/:id/override", requireRole(ROLES.ADMIN, ROLES.WAREHOUSE
     const validWarehouses = new Set(warehousesResult.rows.map((r: any) => Number(r.id)));
 
     const lineResult = await query(
-      `SELECT ql.id, ql.product_id
+      `SELECT ql.id, ql.product_id, p.track_inventory
        FROM fulfillment_orders fo
        JOIN quotation_lines ql ON ql.quotation_id = fo.quotation_id
+       JOIN products p ON p.id = ql.product_id
        WHERE fo.id = $1`,
       [id]
     );
     const lineIdByProduct = new Map<number, number>(
       lineResult.rows.map((r: any) => [Number(r.product_id), Number(r.id)])
+    );
+    const trackInventoryByProduct = new Map<number, boolean>(
+      lineResult.rows.map((r: any) => [Number(r.product_id), Boolean(r.track_inventory)])
     );
 
     const currentByProduct = new Map<number, number>();
@@ -619,6 +528,11 @@ fulfillmentRouter.post("/:id/override", requireRole(ROLES.ADMIN, ROLES.WAREHOUSE
     for (const entry of data.allocations) {
       if (!requestedByProduct.has(entry.product_id)) {
         throw new UnprocessableEntityError(`Product ${entry.product_id} is not part of this quotation`);
+      }
+      if (!trackInventoryByProduct.get(entry.product_id)) {
+        throw new UnprocessableEntityError(
+          `Product ${entry.product_id} is delivered digitally and cannot be allocated to a warehouse`
+        );
       }
       if (!validWarehouses.has(entry.warehouse_id)) {
         throw new UnprocessableEntityError(`Warehouse ${entry.warehouse_id} is not active`);

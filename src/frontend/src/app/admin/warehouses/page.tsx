@@ -26,6 +26,7 @@ interface ProductOption {
   id: number;
   name: string;
   sku: string;
+  track_inventory: boolean;
 }
 
 export default function AdminWarehousesPage() {
@@ -272,9 +273,13 @@ export default function AdminWarehousesPage() {
                   className="col-span-2 border rounded px-3 py-2 text-sm"
                 >
                   <option value="">Select product...</option>
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
-                  ))}
+                  {products
+                    .filter((p) => p.track_inventory)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.sku})
+                      </option>
+                    ))}
                 </select>
                 <input
                   type="number"

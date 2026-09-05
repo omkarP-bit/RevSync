@@ -46,6 +46,7 @@ const mockQuote = {
   margin_pct: "33.33",
   total_overage: "0.0000",
   risk_level: "LOW",
+  payment_terms: "NET_30" as string | null,
   notes: "Test quote",
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
@@ -259,6 +260,66 @@ describe("Quotations routes", () => {
         .send({ status: "CONFIRMED" });
 
       expect(res.status).toBe(422);
+    });
+
+    it("blocks CONFIRMED when the customer has no payment terms selected", async () => {
+      vi.mocked(db.query)
+        .mockResolvedValueOnce(qr([ctxRow({ status: "APPROVED", payment_terms: null })]))
+        .mockResolvedValueOnce(qr([])); // no open approval
+
+      const res = await request(app)
+        .patch("/api/v1/quotations/1")
+        .set("Authorization", `Bearer ${repToken()}`)
+        .send({ status: "CONFIRMED" });
+
+      expect(res.status).toBe(422);
+      expect(res.body.error.message).toContain("payment type");
+    });
+
+    it("confirms an APPROVED quotation and auto-creates a fulfillment order", async () => {
+      const client = { query: vi.fn() };
+      vi.mocked(db.withTransaction).mockImplementation(async (fn: any) => fn(client));
+
+      vi.mocked(client.query)
+        .mockResolvedValueOnce(qr([])) // UPDATE quotations -> CONFIRMED
+        .mockResolvedValueOnce(qr([])) // subscriptions: existing check
+        .mockResolvedValueOnce(qr([{ id: 1, customer_id: 1, currency_code: "USD", status: "APPROVED", payment_terms: "NET_30" }])) // subscription quote
+        .mockResolvedValueOnce(qr([])) // recurring lines -> none
+        .mockResolvedValueOnce(qr([])) // fulfillment: existing check
+        .mockResolvedValueOnce(qr([{ quotation_line_id: 10, product_id: 5, quantity: 10 }])) // quotation lines
+        .mockResolvedValueOnce(qr([{ id: 1, base_shipping_cost: "5.00" }])) // warehouses
+        .mockResolvedValueOnce(qr([{ product_id: 5, warehouse_id: 1, quantity_on_hand: 100 }])) // inventory
+        .mockResolvedValueOnce(qr([])) // allocation shipment counts
+        .mockResolvedValueOnce(qr([{ id: 15, status: "ALLOCATED", shipping_cost: "50.00", backordered_quantity: 0 }])) // insert order
+        .mockResolvedValueOnce(qr([])); // insert allocation
+
+      vi.mocked(db.query)
+        .mockResolvedValueOnce(qr([ctxRow({ status: "APPROVED", payment_terms: "NET_30" })])) // fetchQuoteContext
+        .mockResolvedValueOnce(qr([])) // open approval check
+        .mockResolvedValueOnce(qr([])) // audit: fulfillment auto-created
+        .mockResolvedValueOnce(qr([])) // audit: quotation CONFIRMED
+        .mockResolvedValueOnce(qr([ctxRow({ status: "CONFIRMED", payment_terms: "NET_30" })])) // recalc quote
+        .mockResolvedValueOnce(qr([mockLine])) // recalc lines
+        .mockResolvedValueOnce(qr([])) // discount rules
+        .mockResolvedValueOnce(qr([])) // approval rules
+        .mockResolvedValueOnce(qr([])) // line update
+        .mockResolvedValueOnce(qr([{ ...mockQuote, status: "CONFIRMED" }])) // header update
+        .mockResolvedValueOnce(qr([{ ...mockQuote, status: "CONFIRMED" }])) // payload quote
+        .mockResolvedValueOnce(qr([mockLine])) // payload lines
+        .mockResolvedValueOnce(qr([])); // payload discount rules
+
+      const res = await request(app)
+        .patch("/api/v1/quotations/1")
+        .set("Authorization", `Bearer ${repToken()}`)
+        .send({ status: "CONFIRMED" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe("CONFIRMED");
+      const fulfillmentInsert = client.query.mock.calls.find((call: any) =>
+        String(call[0]).includes("INSERT INTO fulfillment_orders")
+      );
+      expect(fulfillmentInsert).toBeTruthy();
+      expect(client.query.mock.calls.some((call: any) => String(call[0]).includes("INSERT INTO subscription_plans"))).toBe(false);
     });
   });
 

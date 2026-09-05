@@ -303,6 +303,12 @@ describe("Negotiations internal routes", () => {
       // No approval request should be created for a LOW-re-risk quotation.
       const created = vi.mocked(db.query).mock.calls.filter((c) => String(c[0]).includes("INSERT INTO approval_requests"));
       expect(created).toHaveLength(0);
+      // The post-accept recalculation must preserve the line's unit_price (regression:
+      // an accepted discount must never zero out the price).
+      const recalcLineUpdate = vi.mocked(db.query).mock.calls.find((c) => String(c[0]).includes("unit_price = $2"));
+      expect(recalcLineUpdate).toBeTruthy();
+      const [, params] = recalcLineUpdate as [string, unknown[]];
+      expect(params[1]).toBe(100); // unit_price survives; only discount/qty change
     });
 
     it("forbids Sales Reps from accepting requests", async () => {

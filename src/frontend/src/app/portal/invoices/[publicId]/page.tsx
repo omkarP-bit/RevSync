@@ -3,6 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiResponse } from "@/lib/api";
+import { exportPortalInvoicePdf } from "@/lib/pdf";
 
 interface PortalInvoiceLine {
   product_name: string;
@@ -84,9 +85,17 @@ export default function PortalInvoiceDetailPage() {
             Quote {invoice.quotation_number} · Issued {new Date(invoice.issue_date).toLocaleDateString()} · Due {new Date(invoice.due_date).toLocaleDateString()}
           </p>
         </div>
-        <span className={`px-2 py-1 text-xs font-bold rounded-full ${STATUS_BADGE[invoice.status] || "bg-gray-100 text-gray-700"}`}>
-          {invoice.status}
-        </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => exportPortalInvoicePdf(invoice)}
+            className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-50 text-sm font-medium"
+          >
+            ⬇ Export PDF
+          </button>
+          <span className={`px-2 py-1 text-xs font-bold rounded-full ${STATUS_BADGE[invoice.status] || "bg-gray-100 text-gray-700"}`}>
+            {invoice.status}
+          </span>
+        </div>
       </div>
 
       {/* Totals */}

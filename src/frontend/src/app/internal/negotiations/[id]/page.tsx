@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api, ApiResponse } from "@/lib/api";
+import { exportNegotiationPdf } from "@/lib/pdf";
 
 interface NegotiationRequest {
   id: number;
@@ -180,6 +181,12 @@ export default function NegotiationDetailPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => exportNegotiationPdf({ ...neg, lines })}
+            className="px-3 py-1 text-xs font-semibold border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700"
+          >
+            ⬇ Export PDF
+          </button>
           <span className={`px-3 py-1 text-xs font-bold rounded-full ${
             neg.status === "OPEN" ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-700"
           }`}>

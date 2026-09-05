@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
+import { exportFulfillmentPdf } from "@/lib/pdf";
 
 interface Allocation {
   id: number;
@@ -162,6 +163,12 @@ export default function FulfillmentDetailPage() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => exportFulfillmentPdf(order)}
+            className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-50 text-sm font-medium"
+          >
+            ⬇ Export PDF
+          </button>
           <span className={`px-2 py-1 text-xs font-semibold rounded ${statusStyles[order.status] || "bg-gray-100 text-gray-700"}`}>
             {order.status}
           </span>

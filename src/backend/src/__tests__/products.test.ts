@@ -36,6 +36,7 @@ const mockProduct = {
   product_type: "RECURRING",
   base_cost: "1000.0000",
   is_active: true,
+  track_inventory: true,
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
 };
@@ -62,6 +63,7 @@ describe("Products routes", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data[0].base_cost).toBe(1000);
+      expect(res.body.data[0].track_inventory).toBe(true);
     });
 
     it("should strip base_cost for Sales Rep user", async () => {
@@ -246,6 +248,7 @@ describe("Products routes", () => {
       expect(res.status).toBe(200);
       expect(res.body.data).toHaveLength(2);
       expect(res.body.meta.total).toBe(2);
+      expect(String(vi.mocked(db.query).mock.calls[0][0])).toContain("track_inventory = true");
       expect(res.body.data[0]).toMatchObject({
         product_id: 1,
         product_name: "RevSync Enterprise Platform",

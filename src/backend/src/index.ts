@@ -24,6 +24,8 @@ import { negotiationsRouter, negotiationsPortalRouter } from "./modules/negotiat
 import { invoicesRouter, creditNotesRouter, invoicesPortalRouter } from "./modules/billing/billing.routes.js";
 import { subscriptionsRouter } from "./modules/subscriptions/subscriptions.routes.js";
 import { subscriptionsPortalRouter, walletPortalRouter } from "./modules/subscriptions/subscriptionsPortal.routes.js";
+import { dealHealthRouter } from "./modules/deal-health/deal-health.routes.js";
+import { reportsRouter } from "./modules/reports/reports.routes.js";
 
 async function main() {
   const config = loadConfig();
@@ -63,6 +65,8 @@ async function main() {
   app.use("/api/v1/invoices", invoicesRouter);
   app.use("/api/v1/credit-notes", creditNotesRouter);
   app.use("/api/v1/subscriptions", subscriptionsRouter);
+  app.use("/api/v1/deal-health", dealHealthRouter);
+  app.use("/api/v1/reports", reportsRouter);
   app.use("/api/v1/portal/negotiations", negotiationsPortalRouter);
   app.use("/api/v1/portal/invoices", invoicesPortalRouter);
   app.use("/api/v1/portal/subscriptions", subscriptionsPortalRouter);

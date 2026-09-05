@@ -14,6 +14,7 @@ interface Product {
   product_type: "ONE_TIME" | "RECURRING";
   base_cost?: number;
   is_active: boolean;
+  track_inventory: boolean;
   created_at: string;
 }
 
@@ -56,6 +57,7 @@ export default function AdminProductsPage() {
   const [categoryId, setCategoryId] = useState<number>(0);
   const [productType, setProductType] = useState<"ONE_TIME" | "RECURRING">("ONE_TIME");
   const [baseCost, setBaseCost] = useState<number>(0);
+  const [trackInventory, setTrackInventory] = useState(true);
 
   const [inventory, setInventory] = useState<InventoryLocation[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(true);
@@ -159,6 +161,7 @@ export default function AdminProductsPage() {
         product_type: productType,
         base_cost: baseCost,
         is_active: true,
+        track_inventory: trackInventory,
       });
 
       setShowModal(false);
@@ -166,6 +169,7 @@ export default function AdminProductsPage() {
       setName("");
       setDescription("");
       setBaseCost(0);
+      setTrackInventory(true);
       fetchProducts();
     } catch (err: any) {
       alert(err.message || "Failed to create product");
@@ -235,6 +239,7 @@ export default function AdminProductsPage() {
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Product Name</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Inventory</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Base Cost</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
               <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Action</th>
@@ -243,13 +248,13 @@ export default function AdminProductsPage() {
           <tbody className="bg-white divide-y divide-gray-200 text-sm">
             {loading ? (
               <tr>
-                <td colSpan={7} className="px-6 py-4 text-center text-gray-500">
+                <td colSpan={8} className="px-6 py-4 text-center text-gray-500">
                   Loading products...
                 </td>
               </tr>
             ) : products.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-6 py-4 text-center text-gray-500">
+                <td colSpan={8} className="px-6 py-4 text-center text-gray-500">
                   No products found.
                 </td>
               </tr>
@@ -266,6 +271,15 @@ export default function AdminProductsPage() {
                       }`}
                     >
                       {p.product_type}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span
+                      className={`px-2 py-0.5 text-xs font-medium rounded-full ${
+                        p.track_inventory ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"
+                      }`}
+                    >
+                      {p.track_inventory ? "Tracked" : "Digital"}
                     </span>
                   </td>
                   <td className="px-6 py-4 font-medium text-gray-800">
@@ -527,6 +541,15 @@ export default function AdminProductsPage() {
                   className="w-full border rounded px-3 py-2 text-sm"
                 />
               </div>
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={trackInventory}
+                  onChange={(e) => setTrackInventory(e.target.checked)}
+                  className="w-4 h-4"
+                />
+                Track in per-region inventory (uncheck for software / digital products)
+              </label>
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"

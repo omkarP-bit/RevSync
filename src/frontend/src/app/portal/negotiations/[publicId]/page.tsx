@@ -3,6 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiResponse } from "@/lib/api";
+import { exportNegotiationPdf } from "@/lib/pdf";
 
 interface NegotiationLine {
   id: number;
@@ -176,7 +177,25 @@ export default function PortalNegotiationPage() {
               Current total: <span className="font-bold text-gray-900">{neg.currency_code} {Number(neg.current_total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            <button
+              onClick={() =>
+                exportNegotiationPdf({
+                  quotation_number: neg.quotation_number,
+                  customer_name: null,
+                  currency_code: neg.currency_code,
+                  current_total: neg.current_total,
+                  quotation_status: neg.quotation_status,
+                  status: neg.negotiation_status,
+                  lines: neg.lines,
+                  requests: neg.requests,
+                  messages: neg.messages,
+                })
+              }
+              className="px-3 py-1 text-xs font-semibold border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700"
+            >
+              ⬇ Export PDF
+            </button>
             <span className={`px-3 py-1 text-xs font-bold rounded-full ${negotiationBadge.bg}`}>{negotiationBadge.label}</span>
             <span className={`px-3 py-1 text-xs font-bold rounded-full ${quotationBadge}`}>{neg.quotation_status}</span>
           </div>

@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
 import { CustomerFormModal, Customer as ModalCustomer } from "@/components/CustomerFormModal";
+import { exportQuotationPdf } from "@/lib/pdf";
 
 interface QuotationLine {
   id: number;
@@ -1066,6 +1067,12 @@ export default function QuotationDetailBuilderPage() {
 
         {/* Dynamic Context-Aware Action Buttons */}
         <div className="flex items-center gap-3 shrink-0">
+          <button
+            onClick={() => exportQuotationPdf(quote)}
+            className="px-4 py-2.5 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition shadow-xs flex items-center gap-1.5"
+          >
+            <span>⬇</span> Export PDF
+          </button>
           {quote.status === "CONFIRMED" ? (
             <button disabled className="px-5 py-2.5 bg-slate-800 text-slate-300 rounded-lg text-xs font-bold shadow-xs cursor-not-allowed flex items-center gap-1.5">
               Confirmed

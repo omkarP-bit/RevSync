@@ -15,6 +15,7 @@ const productSchema = z.object({
   product_type: z.enum(["ONE_TIME", "RECURRING"]).default("ONE_TIME"),
   base_cost: z.coerce.number().nonnegative(),
   is_active: z.boolean().default(true),
+  track_inventory: z.boolean().default(true),
 });
 
 const variantSchema = z.object({
@@ -34,6 +35,7 @@ function serializeProduct(product: any, userRole: number) {
   rest.id = Number(rest.id);
   rest.category_id = Number(rest.category_id);
   rest.base_cost = Number(rest.base_cost);
+  rest.track_inventory = rest.track_inventory === true || rest.track_inventory === "true";
 
   // If user is not Admin or Finance, strip base_cost
   if (userRole !== ROLES.ADMIN && userRole !== ROLES.FINANCE) {
@@ -79,7 +81,7 @@ productsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MA
 
     const result = await query(
       `SELECT p.id, p.sku, p.name, p.description, p.category_id, cat.name as category_name,
-              p.product_type, p.base_cost, p.is_active, p.created_at, p.updated_at
+              p.product_type, p.base_cost, p.is_active, p.track_inventory, p.created_at, p.updated_at
        FROM products p
        LEFT JOIN categories cat ON p.category_id = cat.id
        ${whereClause}
@@ -107,6 +109,7 @@ productsRouter.get("/inventory", requireRole(ROLES.ADMIN, ROLES.WAREHOUSE_MANAGE
        FROM inventory_items ii
        JOIN products p ON ii.product_id = p.id
        JOIN warehouses w ON ii.warehouse_id = w.id
+       WHERE p.track_inventory = true
        ORDER BY p.name ASC, w.name ASC`
     );
 
@@ -137,7 +140,7 @@ productsRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES
 
     const productResult = await query(
       `SELECT p.id, p.sku, p.name, p.description, p.category_id, cat.name as category_name,
-              p.product_type, p.base_cost, p.is_active, p.created_at, p.updated_at
+              p.product_type, p.base_cost, p.is_active, p.track_inventory, p.created_at, p.updated_at
        FROM products p
        LEFT JOIN categories cat ON p.category_id = cat.id
        WHERE p.id = $1`,
@@ -194,10 +197,10 @@ productsRouter.post("/", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.WAR
     const data = productSchema.parse(req.body);
 
     const result = await query(
-      `INSERT INTO products (sku, name, description, category_id, product_type, base_cost, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO products (sku, name, description, category_id, product_type, base_cost, is_active, track_inventory)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [data.sku, data.name, data.description || null, data.category_id, data.product_type, data.base_cost, data.is_active]
+      [data.sku, data.name, data.description || null, data.category_id, data.product_type, data.base_cost, data.is_active, data.track_inventory]
     );
 
     res.status(201).json({ data: serializeProduct(result.rows[0], userRole) });

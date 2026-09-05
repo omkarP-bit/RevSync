@@ -116,7 +116,7 @@ src/frontend/tailwind.config.ts, postcss.config.js
 | /internal/fulfillment | Placeholder (Phase 5) |
 | /internal/subscriptions | Placeholder (Phase 8) |
 | /internal/invoices | Placeholder (Phase 7) |
-| /internal/deal-health | Placeholder (Phase 9) |
+| /internal/deal-health | Deal Health dashboard (Phase 9) |
 | /internal/reports | Placeholder (Phase 9) |
 
 ---
@@ -442,11 +442,78 @@ src/frontend/tailwind.config.ts, postcss.config.js
 
 ---
 
+## Phase 9 — Deal Health
+
+**Status:** COMPLETED
+**Date:** 2026-09-05
+
+### What was built
+- Migration `010_deal_health.ts`: `deal_health_signal_config` (5 seeded signals with default weights) and `deal_health_snapshots` (one snapshot per quotation, UNIQUE `quotation_id`, status/score/signals JSONB, computed_by audit). Applied to the dev DB.
+- Scoring engine (`engines/deal-health-engine.ts`): pure, deterministic, explainable. Five signals with default weights summing to 100:
+  - `STALLED_QUOTE` (30) — open quotation not updated in `>3 days` (severe at 15).
+  - `APPROVAL_DELAY` (25) — pending approval waiting `>2 days` (severe at 7).
+  - `INVENTORY_SHORTAGE` (20) — backorder / requested quantity ratio on confirmed quotations.
+  - `HIGH_DISCOUNT_RISK` (15) — risk level HIGH / MEDIUM, or margin below healthy (15%) / low (10%) floors.
+  - `NEGOTIATION_STALL` (10) — open negotiation not progressed in `>3 days` (severe at 10).
+- Each signal yields severity (0–1, linear ramp between tolerance and severe), weighted contribution, and an explainable `reason`. Score is normalized to 0–100 over the enabled weight total; disabled signals contribute 0 but keep their configured weight. Status: **HEALTHY** (< 30), **AT_RISK** (< 70), **CRITICAL** (≥ 70).
+- Module (`modules/deal-health/`): `GET /config`, `PATCH /config/:key` (Admin/Sales Manager; zod-validated weight 0–100 + is_enabled, audit logged), `POST /refresh` (Admin/Finance/Sales Manager; recomputes all non-terminal quotations and upserts snapshots), `GET /` (paginated, status/customer/sales-rep filters), `GET /overview`, `GET /:id` (signal breakdown + joins for quotation number / customer / sales rep). Mounted at `/api/v1/deal-health`.
+- Frontend `/internal/deal-health`: overview cards (Healthy/At Risk/Critical/Total/Avg score), status filter tabs, paginated snapshot table (quotation, customer, sales rep, status badge, score, computed time), click-to-expand per-signal breakdown with severity bars and reasons, Refresh button, and a Configure Weights modal (weight sliders + enable toggle) for managers — mirroring `invoices` page conventions.
+
+### Endpoints
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/v1/deal-health` | List snapshots (paginated, status/customer/sales-rep filters) |
+| GET | `/api/v1/deal-health/config` | Signal weight configuration (Admin/Sales Manager) |
+| PATCH | `/api/v1/deal-health/config/:key` | Update weight / is_enabled (Admin/Sales Manager; 400 unknown key/invalid weight) |
+| POST | `/api/v1/deal-health/refresh` | Recompute + upsert snapshots for all open quotations (Admin/Finance/Sales Manager) |
+| GET | `/api/v1/deal-health/overview` | Counts by status + avg score |
+| GET | `/api/v1/deal-health/:id` | Snapshot detail with signal breakdown |
+
+### E2E verification
+- Live smoke against the dev DB: config seeded with correct weights; refresh computed **12 HEALTHY** snapshots (avg score 7.19, no AT_RISK/CRITICAL — demo data has no severe stalls); detail endpoint returns the full signal breakdown with reasons (e.g. QT-2026-0003 flagged HIGH discount risk); sales rep is **403** on `/config` while still able to view `/`; admin PATCH weight→50 applied (200), invalid weight 999 rejected (400), rep PATCH blocked (403). Config state restored to defaults after testing.
+- Test suite: **+20 tests** (deal-health.test.ts) — engine units (daysBetween, fresh→HEALTHY, stall→AT_RISK, terminal no-stall, approval ramp scaling, backorder ratio, HIGH/margin discount reasons, fully degraded→CRITICAL at 100, disabled signal exclusion, per-signal reason) + route integration (auth 401, role gates 403, config read/update + audit, unknown key 400, refresh counts, pagination, overview avg, snapshot detail, 404).
+
+---
+
+## Change Request — Inventory Action on Quotation Confirmation
+
+**Status:** COMPLETED
+**Date:** 2026-09-05
+
+### What changed
+- **Confirmed: invoice generation performs NO inventory action.** `POST /api/v1/invoices` only creates the invoice + lines + audit; stock is untouched by invoicing. Previously, inventory was only ever touched at **ship time** (`POST /api/v1/fulfillment/:id/ship` decrements `quantity_on_hand`), and fulfillment orders were created **manually** by warehouse staff. Confirming a deal never committed stock.
+- **Inventory is now committed at confirmation.** Extracted the fulfillment auto-allocation logic into a shared service (`modules/fulfillment/fulfillment-service.ts` → `createFulfillmentForQuotation`) used by **both** the manual `POST /api/v1/fulfillment` route and the quotation confirm flow. When a quotation is confirmed (`PATCH /api/v1/quotations/:id` → `CONFIRMED`), a fulfillment order + allocations are created inside the same transaction, reserving available stock and computing the fulfillment status (ALLOCATED / PARTIAL / BACKORDERED). Audit action `FULFILLMENT_AUTO_CREATED`, note "Auto-created on quotation confirmation". Non-fatal conditions (existing order, no lines, no active warehouse) **skip** rather than block confirmation.
+- **Payment type is enforced at confirmation.** `fetchQuoteContext` now also returns `c.payment_terms`; confirming requires the customer to have a payment type selected, otherwise 422 `"Customer has no payment type selected; please set payment terms before confirming"`. The confirmation audit records the `payment_terms` used (which drives the invoice due date via `PAYMENT_TERM_DAYS`).
+- Manual `POST /api/v1/fulfillment` now routes through the same service (identical behavior/errors: 409 existing order, 422 no lines / no warehouses).
+
+### E2E verification
+- Live smoke on dev DB: `QT-2026-0009` (APPROVED, Titan Industries, NET_30) confirmed → quote → CONFIRMED, fulfillment order **#5** auto-created with status ALLOCATED and 1 unit allocated from MUM-01; audit action `FULFILLMENT_AUTO_CREATED` present. Stock untouched until ship (by design).
+- Test suite: **+2 tests** (quotations.test.ts) — confirm requires a customer payment type (422 + message) and a successful confirm auto-creates a fulfillment order (allocation insert verified, subscription plan NOT created for one-time products).
+
+---
+
+## Change Request — Software / Digital Products Excluded from Inventory
+
+**Status:** COMPLETED
+**Date:** 2026-09-05
+
+### What changed
+- **New product flag `track_inventory`.** Migration `011_untracked_products` adds `products.track_inventory BOOLEAN NOT NULL DEFAULT true`. Demo data marks software/cloud/service SKUs (`SW-`, `CS-`, `PS-`, ad-hoc `SMK-`) as `false`; only physical hardware stays tracked. The seed writes the flag per category (`Hardware & Devices` → true, everything else → false).
+- **Inventory endpoints are filtered and guarded.** `GET /api/v1/products/inventory` and `GET /api/v1/warehouses/:id/inventory` only return `track_inventory = true` products (per-region counts never include software). `POST /api/v1/warehouses/:id/inventory` rejects untracked products with 422 — software can no longer be given a stock level anywhere.
+- **Fulfillment treats untracked lines as digitally delivered.** `createFulfillmentForQuotation` now joins `products.track_inventory` onto quotation lines. Software lines are excluded from warehouse allocation entirely: no `fulfillment_allocations` rows, zero shipping cost, and **never backordered**. A purely digital order needs no warehouse lookup at all and is `ALLOCATED` with 0 backorders — so deal-health inventory-shortage signals and confirmation can't be polluted by software stock. The manual override endpoint likewise rejects warehouse allocations for untracked products.
+- **Product API exposes the flag.** `/products` list + `/products/:id` return `track_inventory`; POST create and PATCH update accept it. Frontend product catalog shows a Tracked/Digital badge and the create modal has a "Track in per-region inventory" toggle; the warehouse stock-level picker only lists tracked products.
+
+### E2E verification
+- Live smoke on dev DB: migration applied; `SW-ENT-001`, `CS-SUPP-001`, smoke product untracked, only `HW-GATEWAY-001` tracked. `/products/inventory` returns only the gateway rows (was 5 software rows). Setting stock for product 1 → 422 `"RevSync Enterprise Platform" is not tracked in inventory…`; gateway stock update still 201. Confirming mixed quote `QT-2026-002` (8 software units + 1 gateway) → fulfillment order **#7 ALLOCATED** with 0 backorders and exactly 1 allocation (gateway); confirming hardware-only `QT-2026-0011` (qty 15) → **#6 PARTIAL / 7 backordered** as before.
+- Test suite: **+2 tests** (fulfillment.test.ts) — POST inventory rejects untracked products (422, no upsert) and a digital-only fulfillment order creates zero allocations/backorders without any warehouse query; products.test.ts asserts `track_inventory` serialization + the inventory SQL filter. Full suite **280 tests / 27 files**.
+
+---
+
 ## Test Coverage Summary
 
 ### Test framework: Vitest
 ### Run command: `npm test` (in src/backend)
-### Total: **245 tests across 25 test files — all passing**
+### Total: **280 tests across 27 test files — all passing**
 
 | Test file | Tests | Covers |
 |-----------|-------|--------|
@@ -454,16 +521,17 @@ src/frontend/tailwind.config.ts, postcss.config.js
 | `negotiations.test.ts` | 20 | list/detail/open/conflict/validation/accept-HIGH auto-reapproval/accept-LOW/reject/roles/messages/close, portal GET+list+403+request+message |
 | `customerTier.test.ts` | 9 | Evaluate/confirm/override endpoints, role gating (rep 403 on override), 404s, evaluation history |
 | `quotationEngine.test.ts` | 3 | calculateQuotation calculations, line subtotal/discount/margin, header tax/grand_total/margins |
-| `quotations.test.ts` | 6 | GET/POST quotations, GET /:id with lines, line add/edit/delete recalculation, approval reopen + auto-approve on risk drop |
+| `quotations.test.ts` | 19 | GET/POST quotations, GET /:id with lines, line add/edit/delete recalculation, approval reopen + auto-approve on risk drop, CONFIRMED guards (not approved 422, open approval 422, missing payment type 422), confirm auto-creates fulfillment order |
 | `discountEngine.test.ts` | 6 | overage per line, non-matching rules, cliff/ceiling, discount engine aggregations |
 | `approvalEngine.test.ts` | 14 | risk mapping, steps building, applyDecision flows, queue semantics, not-actionable guards |
 | `discounts.test.ts` | 8 | discount rules CRUD, pagination, role checks, conflicts |
 | `approvals.test.ts` | 15 | approvals list/detail, rules admin, decision flows, role gating, guards |
 | `fulfillmentEngine.test.ts` | 8 | allocation ranking/splitting/ties/backorder, stock consumption, status mapping |
-| `fulfillment.test.ts` | 18 | warehouses + inventory CRUD, order create/backorder, override (+over-allocation 422, reallocation/removal), ship (+insufficient stock 409), cancel, role checks |
+| `fulfillment.test.ts` | 20 | warehouses + inventory CRUD (incl. software rejection 422 + track_inventory filtering), order create/backorder, digital-only orders (0 allocations/backorders, no warehouse query), override (+over-allocation 422, reallocation/removal), ship (+insufficient stock 409), cancel, role checks |
 | `pricingEngine.test.ts` | 3 | resolveUnitPrice resolution, case-insensitivity, missing match fallback |
 | `billing.test.ts` | 22 | invoice generation (CONFIRMED guard, recurring-only all-lines invoice, 409 dup, 422 non-confirmed/no lines), auth+role gates, list+pagination, billable-quotations (all confirmed), detail (lines/payments/credit notes), payments (partial→PAID, cancelled 422, idempotent replay), cancel (paid 422), credit note list+create, portal list/ownership-404/sanitized detail |
-| `products.test.ts` | 5 | GET /products (pagination, default sort), base_cost security serialization, POST /products role check |
+| `deal-health.test.ts` | 20 | engine scoring (fresh→HEALTHY, stall→AT_RISK, terminal no-stall, approval ramp, backorder ratio, HIGH/margin discount reasons, fully degraded CRITICAL, disabled signal exclusion, per-signal reason), config read/update + audit, unknown key 400, refresh counts, pagination, overview avg, snapshot detail, 404, role gates |
+| `products.test.ts` | 5 | GET /products (pagination, default sort), base_cost security serialization, track_inventory serialization + inventory SQL filter, POST /products role check |
 | `pricelists.test.ts` | 3 | GET /pricelists (pagination, sort), POST /pricelists, POST /pricelists/:id/items price updates |
 | `errors.test.ts` | 12 | AppError, NotFoundError, UnauthorizedError, ForbiddenError, ConflictError, ValidationError |
 | `config.test.ts` | 4 | loadConfig validation, defaults, missing env, short JWT_SECRET |

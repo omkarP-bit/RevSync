@@ -4,6 +4,7 @@ import { authenticate, requireRole, ROLES } from "../../middleware/auth.js";
 import { NotFoundError, ValidationError, UnprocessableEntityError, ConflictError, ForbiddenError } from "../../shared/errors.js";
 import { writeAuditLog } from "../../shared/audit.js";
 import { createSubscriptionsForQuotation } from "../../engines/subscription-engine.js";
+import { createFulfillmentForQuotation } from "../fulfillment/fulfillment-service.js";
 
 function assertQuotationNotConfirmed(status: string): void {
   if (status === "CONFIRMED") {
@@ -372,6 +373,11 @@ quotationsRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.S
         if (openApproval.rows.length > 0) {
           throw new UnprocessableEntityError("Approval is still pending for this quotation");
         }
+        if (!quote.payment_terms) {
+          throw new UnprocessableEntityError(
+            "Customer has no payment type selected; please set payment terms before confirming"
+          );
+        }
       }
 
       if ((targetStatus === "DRAFT" || targetStatus === "NEGOTIATION") && quote.status === "PENDING_APPROVAL") {
@@ -406,14 +412,19 @@ quotationsRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.S
             [targetStatus, realId]
           );
           await createSubscriptionsForQuotation(client, realId, userId);
+          await createFulfillmentForQuotation(client, realId, userId, { skipIfNotFulfillable: true });
           await writeAuditLog({
             entityType: "quotations",
             entityId: realId,
             action: targetStatus,
             before: { status: quote.status },
-            after: { status: targetStatus },
+            after: {
+              status: targetStatus,
+              payment_terms: quote.payment_terms,
+              fulfillment: "AUTO_CREATED",
+            },
             performedBy: userId,
-            reason: "Quotation confirmed; recurring subscriptions & billing schedules initialized",
+            reason: "Quotation confirmed; subscriptions & billing schedules initialized and stock allocated",
           });
         });
       } else {
