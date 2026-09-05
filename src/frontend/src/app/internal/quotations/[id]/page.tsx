@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
+import { CustomerFormModal, Customer as ModalCustomer } from "@/components/CustomerFormModal";
 
 interface QuotationLine {
   id: number;
@@ -168,6 +169,9 @@ export default function QuotationDetailBuilderPage() {
   // Debounced line edit state
   const [updatingLineId, setUpdatingLineId] = useState<number | null>(null);
   const updateDebounceTimers = useRef<Record<number, NodeJS.Timeout>>({});
+
+  // Customer Creation Modal State
+  const [showCreateCustomerModal, setShowCreateCustomerModal] = useState(false);
 
   // Add Line Modal State
   const [showAddModal, setShowAddModal] = useState(false);
@@ -347,10 +351,16 @@ export default function QuotationDetailBuilderPage() {
       });
       setQuote(res.data);
       fetchRecommendations(res.data.lines);
-      showToast("Customer updated successfully", "success");
+      showToast("Customer updated & quotation recalculated", "success");
     } catch (err: any) {
       showToast(err.message || "Failed to update customer", "error");
     }
+  };
+
+  const handleCustomerCreated = async (newCustomer: ModalCustomer) => {
+    showToast(`Customer ${newCustomer.name} created! Attaching to quotation...`, "success");
+    await fetchCustomers();
+    handleCustomerChange(newCustomer.id);
   };
 
   const handleTaxRateChange = async (newTaxRate: number) => {
@@ -543,6 +553,12 @@ export default function QuotationDetailBuilderPage() {
 
   return (
     <div className="w-full space-y-6">
+      <CustomerFormModal
+        isOpen={showCreateCustomerModal}
+        onClose={() => setShowCreateCustomerModal(false)}
+        onSuccess={handleCustomerCreated}
+      />
+
       {/* Toast Notification Banner */}
       {toast && (
         <div
@@ -636,7 +652,17 @@ export default function QuotationDetailBuilderPage() {
       {/* Customer & Price List Header Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Select Customer</label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">Select Customer</label>
+            {!isLocked && (
+              <button
+                onClick={() => setShowCreateCustomerModal(true)}
+                className="text-[11px] font-bold text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1"
+              >
+                + Create New Customer
+              </button>
+            )}
+          </div>
           <select
             disabled={isLocked}
             value={quote.customer_id}

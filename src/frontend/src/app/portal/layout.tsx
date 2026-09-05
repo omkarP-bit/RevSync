@@ -27,7 +27,6 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
               <Link href="/portal/wallet" className="text-gray-600 hover:text-indigo-600">Credit Wallet</Link>
             </div>
           </div>
-          </div>
         </div>
       </nav>
       <main className="max-w-7xl mx-auto p-6">{children}</main>

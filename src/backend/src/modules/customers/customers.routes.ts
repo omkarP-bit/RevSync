@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { query } from "../../database/pool.js";
 import { authenticate, requireRole, ROLES } from "../../middleware/auth.js";
-import { NotFoundError, ValidationError, ConflictError } from "../../shared/errors.js";
+import { NotFoundError, ValidationError, ConflictError, ForbiddenError } from "../../shared/errors.js";
 import { writeAuditLog } from "../../shared/audit.js";
 import { z } from "zod";
 import {
@@ -20,24 +20,35 @@ const TIERS = ["BRONZE", "SILVER", "GOLD"] as const;
 const customerSchema = z.object({
   name: z.string().min(1).max(255),
   email: z.string().email(),
-  company: z.string().max(255).optional(),
-  phone: z.string().max(50).optional(),
-  tier_id: z.number().int().positive(),
+  company: z.string().max(255).optional().nullable(),
+  phone: z.string().max(50).optional().nullable(),
+  tier_id: z.number().int().positive().optional(),
   status: z.enum(["ACTIVE", "INACTIVE", "SUSPENDED"]).default("ACTIVE"),
   currency_code: z.string().length(3).default("USD"),
   customer_type: z.enum(CUSTOMER_TYPES).default("BUSINESS"),
   expected_po_value: z.number().min(0).default(0),
   payment_terms: z.enum(PAYMENT_TERMS).default("NET_30"),
   upfront_payment_pct: z.number().min(0).max(100).default(0),
+  credit_limit: z.number().min(0).default(0),
+  billing_address: z.string().optional().nullable(),
+  shipping_address: z.string().optional().nullable(),
 });
 
 const CUSTOMER_SELECT = `
   SELECT c.id, c.name, c.email, c.company, c.phone, c.status, c.currency_code,
-         c.tier_id, ct.name as tier_name,
+         c.tier_id, ct_eff.name as tier_name,
+         c.calculated_tier_id, ct_calc.name as calculated_tier_name,
+         c.tier_override_id, ct_over.name as override_tier_name,
+         c.tier_override_by, u_over.first_name || ' ' || u_over.last_name as override_by_name,
+         c.tier_override_at, c.tier_override_reason,
          c.customer_type, c.expected_po_value, c.payment_terms, c.upfront_payment_pct,
+         c.credit_limit, c.billing_address, c.shipping_address,
          c.created_at, c.updated_at
   FROM customers c
-  LEFT JOIN customer_tiers ct ON c.tier_id = ct.id
+  LEFT JOIN customer_tiers ct_eff ON c.tier_id = ct_eff.id
+  LEFT JOIN customer_tiers ct_calc ON c.calculated_tier_id = ct_calc.id
+  LEFT JOIN customer_tiers ct_over ON c.tier_override_id = ct_over.id
+  LEFT JOIN users u_over ON c.tier_override_by = u_over.id
 `;
 
 async function getCustomerOrThrow(id: string) {
@@ -67,6 +78,40 @@ async function loadTierRules(): Promise<CustomerTierRule[]> {
     is_active: Boolean(r.is_active),
   }));
 }
+
+// GET /api/v1/customers/tiers — list active customer tiers
+customersRouter.get("/tiers", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await query(`SELECT id, name, description, discount_ceiling_pct FROM customer_tiers ORDER BY id ASC`);
+    res.json({ data: result.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/v1/customers/evaluate-preview — live calculated tier preview for UI
+customersRouter.post("/evaluate-preview", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const previewSchema = z.object({
+      customer_type: z.enum(CUSTOMER_TYPES).default("BUSINESS"),
+      expected_po_value: z.number().min(0).default(0),
+      upfront_payment_pct: z.number().min(0).max(100).default(0),
+      payment_terms: z.enum(PAYMENT_TERMS).default("NET_30"),
+    });
+    const body = previewSchema.parse(req.body);
+    const rules = await loadTierRules();
+    const outcome = evaluateCustomerTier(body, rules);
+    res.json({
+      data: {
+        recommended_tier: outcome.recommended_tier,
+        matched_rules: outcome.matched_rules,
+        input: body,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 customersRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -236,28 +281,133 @@ customersRouter.get("/:id/quotations", requireRole(ROLES.ADMIN, ROLES.SALES_REP,
   }
 });
 
-customersRouter.post("/", requireRole(ROLES.ADMIN), async (req: Request, res: Response, next: NextFunction) => {
+customersRouter.post("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const isSalesRep = req.user?.roleId === ROLES.SALES_REP;
+
+    if (isSalesRep && req.body.credit_limit !== undefined && req.body.credit_limit > 0) {
+      throw new ForbiddenError("Sales representatives are not authorized to set or modify credit limits.");
+    }
+
     const data = customerSchema.parse(req.body);
-    const result = await query(
-      `INSERT INTO customers (name, email, company, phone, tier_id, status, currency_code,
-                              customer_type, expected_po_value, payment_terms, upfront_payment_pct)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING *`,
-      [data.name, data.email.toLowerCase(), data.company, data.phone, data.tier_id, data.status, data.currency_code,
-       data.customer_type, data.expected_po_value, data.payment_terms, data.upfront_payment_pct]
+
+    const rules = await loadTierRules();
+    const outcome = evaluateCustomerTier(
+      {
+        customer_type: data.customer_type,
+        expected_po_value: data.expected_po_value,
+        upfront_payment_pct: data.upfront_payment_pct,
+        payment_terms: data.payment_terms,
+      },
+      rules
     );
 
-    res.status(201).json({ data: result.rows[0] });
-  } catch (err) {
+    const calcTierRes = await query(`SELECT id FROM customer_tiers WHERE UPPER(name) = $1`, [outcome.recommended_tier]);
+    const calculatedTierId = calcTierRes.rows[0] ? Number(calcTierRes.rows[0].id) : (data.tier_id || 1);
+
+    let effectiveTierId = calculatedTierId;
+    let overrideTierId: number | null = null;
+    let overrideBy: number | null = null;
+    let overrideAt: Date | null = null;
+    let overrideReason: string | null = null;
+
+    if (!isSalesRep && data.tier_id && data.tier_id !== calculatedTierId) {
+      effectiveTierId = data.tier_id;
+      overrideTierId = data.tier_id;
+      overrideBy = req.user?.userId ?? null;
+      overrideAt = new Date();
+      overrideReason = req.body.tier_override_reason || "Manager override at customer creation";
+    }
+
+    const insertRes = await query(
+      `INSERT INTO customers (name, email, company, phone, tier_id, calculated_tier_id,
+                              tier_override_id, tier_override_by, tier_override_at, tier_override_reason,
+                              status, currency_code, customer_type, expected_po_value, payment_terms,
+                              upfront_payment_pct, credit_limit, billing_address, shipping_address)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       RETURNING id`,
+      [
+        data.name,
+        data.email.toLowerCase(),
+        data.company ?? null,
+        data.phone ?? null,
+        effectiveTierId,
+        calculatedTierId,
+        overrideTierId,
+        overrideBy,
+        overrideAt,
+        overrideReason,
+        data.status,
+        data.currency_code,
+        data.customer_type,
+        data.expected_po_value,
+        data.payment_terms,
+        data.upfront_payment_pct,
+        isSalesRep ? 0 : data.credit_limit,
+        data.billing_address ?? null,
+        data.shipping_address ?? null,
+      ]
+    );
+
+    const createdId = insertRes.rows[0].id;
+
+    const inputSnapshot = {
+      customer_type: data.customer_type,
+      expected_po_value: data.expected_po_value,
+      payment_terms: data.payment_terms,
+      upfront_payment_pct: data.upfront_payment_pct,
+    };
+
+    await query(
+      `INSERT INTO customer_tier_evaluations
+         (customer_id, status, recommended_tier, resolved_tier, input_snapshot, matched_rules, action_by, reason)
+       VALUES ($1, $2, $3, (SELECT name FROM customer_tiers WHERE id = $4), $5::jsonb, $6::jsonb, $7, $8)`,
+      [
+        createdId,
+        overrideTierId ? "OVERRIDDEN" : "CONFIRMED",
+        outcome.recommended_tier,
+        effectiveTierId,
+        JSON.stringify(inputSnapshot),
+        JSON.stringify(outcome.matched_rules),
+        req.user?.userId ?? null,
+        overrideReason || "Automatic server-side tier evaluation at creation",
+      ]
+    );
+
+    const fullCustomer = await getCustomerOrThrow(String(createdId));
+
+    await writeAuditLog({
+      entityType: "customer",
+      entityId: String(createdId),
+      action: "CREATE",
+      after: fullCustomer,
+      performedBy: req.user?.userId,
+    });
+
+    res.status(201).json({ data: fullCustomer });
+  } catch (err: any) {
+    if (err.code === "23505" && err.constraint?.includes("email")) {
+      return next(new ConflictError(`A customer with email ${req.body?.email} already exists.`));
+    }
     next(err);
   }
 });
 
-customersRouter.patch("/:id", requireRole(ROLES.ADMIN), async (req: Request, res: Response, next: NextFunction) => {
+customersRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
+    const isSalesRep = req.user?.roleId === ROLES.SALES_REP;
     const fields = customerSchema.partial().parse(req.body);
+
+    if (isSalesRep) {
+      if (fields.credit_limit !== undefined) {
+        throw new ForbiddenError("Sales representatives are not authorized to set or modify credit limits.");
+      }
+      if (fields.tier_id !== undefined) {
+        throw new ForbiddenError("Sales Representatives are not authorized to modify customer tier");
+      }
+    }
+
     const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
 
     if (entries.length === 0) {
@@ -266,13 +416,41 @@ customersRouter.patch("/:id", requireRole(ROLES.ADMIN), async (req: Request, res
 
     const before = await getCustomerOrThrow(id);
 
-    const setClauses = entries.map(([key], i) => `${key} = $${i + 1}`);
-    const values = entries.map(([, v]) => v);
+    const hasCommercialChange =
+      fields.customer_type !== undefined ||
+      fields.upfront_payment_pct !== undefined ||
+      fields.expected_po_value !== undefined ||
+      fields.payment_terms !== undefined;
+
+    let setClauses = entries.map(([key], i) => `${key} = $${i + 1}`);
+    let values: unknown[] = entries.map(([, v]) => v);
+
+    if (hasCommercialChange) {
+      const mergedInput = {
+        customer_type: fields.customer_type ?? before.customer_type,
+        expected_po_value: fields.expected_po_value ?? (Number(before.expected_po_value) || 0),
+        upfront_payment_pct: fields.upfront_payment_pct ?? (Number(before.upfront_payment_pct) || 0),
+        payment_terms: fields.payment_terms ?? before.payment_terms,
+      };
+
+      const rules = await loadTierRules();
+      const outcome = evaluateCustomerTier(mergedInput, rules);
+      const calcRes = await query(`SELECT id FROM customer_tiers WHERE UPPER(name) = $1`, [outcome.recommended_tier]);
+      const newCalculatedTierId = calcRes.rows[0] ? Number(calcRes.rows[0].id) : before.calculated_tier_id;
+
+      setClauses.push(`calculated_tier_id = $${values.length + 1}`);
+      values.push(newCalculatedTierId);
+
+      if (!before.tier_override_id) {
+        setClauses.push(`tier_id = $${values.length + 1}`);
+        values.push(newCalculatedTierId);
+      }
+    }
 
     const result = await query(
       `UPDATE customers SET ${setClauses.join(", ")}, updated_at = NOW()
-       WHERE id = $${entries.length + 1}
-       RETURNING *`,
+       WHERE id = $${values.length + 1}
+       RETURNING id`,
       [...values, id]
     );
 
@@ -280,17 +458,22 @@ customersRouter.patch("/:id", requireRole(ROLES.ADMIN), async (req: Request, res
       throw new NotFoundError("Customer", id);
     }
 
+    const updated = await getCustomerOrThrow(id);
+
     await writeAuditLog({
       entityType: "customer",
       entityId: id,
       action: "UPDATE",
       before,
-      after: result.rows[0],
+      after: updated,
       performedBy: req.user?.userId,
     });
 
-    res.json({ data: result.rows[0] });
-  } catch (err) {
+    res.json({ data: updated });
+  } catch (err: any) {
+    if (err.code === "23505" && err.constraint?.includes("email")) {
+      return next(new ConflictError(`A customer with email ${req.body?.email} already exists.`));
+    }
     next(err);
   }
 });
@@ -298,7 +481,6 @@ customersRouter.patch("/:id", requireRole(ROLES.ADMIN), async (req: Request, res
 // ---- Customer Tier Engine workflow ----
 
 // POST /customers/:id/tier/evaluate
-// Deterministically recommend a tier from the configured rules + customer attributes.
 customersRouter.post(
   "/:id/tier/evaluate",
   requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER),
@@ -337,7 +519,6 @@ customersRouter.post(
 );
 
 // POST /customers/:id/tier/confirm
-// Sales Rep / Admin accepts the engine recommendation -> resolved tier is set.
 customersRouter.post(
   "/:id/tier/confirm",
   requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER),
@@ -372,7 +553,7 @@ customersRouter.post(
       };
 
       await query(
-        `UPDATE customers SET tier_id = $1, updated_at = NOW() WHERE id = $2`,
+        `UPDATE customers SET tier_id = $1, calculated_tier_id = $1, updated_at = NOW() WHERE id = $2`,
         [tierId, customer.id]
       );
 
@@ -414,30 +595,40 @@ customersRouter.post(
 );
 
 // POST /customers/:id/tier/override
-// A non-recommended tier requires a manager-approval/override path + audit record.
 customersRouter.post(
   "/:id/tier/override",
   requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const schema = z.object({
-        requested_tier: z.enum(TIERS),
+        requested_tier: z.enum(TIERS).optional(),
+        override_tier_id: z.number().int().positive().optional(),
         reason: z.string().min(1, "An override reason is required"),
       });
       const body = schema.parse(req.body);
 
       const customer = await getCustomerOrThrow(req.params.id);
-      const tier = await query(
-        `SELECT id FROM customer_tiers WHERE UPPER(name) = $1`,
-        [body.requested_tier]
-      );
-      if (tier.rows.length === 0) {
-        throw new ConflictError(`Tier ${body.requested_tier} not found`);
-      }
-      const tierId = Number(tier.rows[0].id);
+      let overrideTierId: number;
+      let requestedTierName: string;
 
-      // The engine's recommendation is recorded (not silently overwritten) so
-      // the override stays explainable against what the rules said.
+      if (body.override_tier_id) {
+        const tierRes = await query(`SELECT id, name FROM customer_tiers WHERE id = $1`, [body.override_tier_id]);
+        if (tierRes.rows.length === 0) {
+          throw new ConflictError(`Tier ID ${body.override_tier_id} not found`);
+        }
+        overrideTierId = Number(tierRes.rows[0].id);
+        requestedTierName = tierRes.rows[0].name;
+      } else if (body.requested_tier) {
+        const tierRes = await query(`SELECT id, name FROM customer_tiers WHERE UPPER(name) = $1`, [body.requested_tier]);
+        if (tierRes.rows.length === 0) {
+          throw new ConflictError(`Tier ${body.requested_tier} not found`);
+        }
+        overrideTierId = Number(tierRes.rows[0].id);
+        requestedTierName = body.requested_tier;
+      } else {
+        throw new ValidationError("Either requested_tier or override_tier_id is required");
+      }
+
       const rules = await loadTierRules();
       const outcome = evaluateCustomerTier(
         {
@@ -457,8 +648,15 @@ customersRouter.post(
       };
 
       await query(
-        `UPDATE customers SET tier_id = $1, updated_at = NOW() WHERE id = $2`,
-        [tierId, customer.id]
+        `UPDATE customers
+         SET tier_id = $1,
+             tier_override_id = $1,
+             tier_override_by = $2,
+             tier_override_at = NOW(),
+             tier_override_reason = $3,
+             updated_at = NOW()
+         WHERE id = $4`,
+        [overrideTierId, req.user?.userId ?? null, body.reason, customer.id]
       );
 
       await query(
@@ -481,7 +679,7 @@ customersRouter.post(
         entityId: customer.id,
         action: "TIER_OVERRIDE",
         before: { tier: customer.tier_name },
-        after: { tier: body.requested_tier },
+        after: { tier: requestedTierName, reason: body.reason },
         performedBy: req.user?.userId,
         reason: body.reason,
       });
@@ -490,7 +688,7 @@ customersRouter.post(
       res.json({
         data: {
           customer_id: Number(customer.id),
-          resolved_tier: body.requested_tier,
+          resolved_tier: requestedTierName,
           status: "OVERRIDDEN",
           reason: body.reason,
           customer: updated,
@@ -502,8 +700,69 @@ customersRouter.post(
   }
 );
 
+// POST /customers/:id/tier/clear-override
+customersRouter.post(
+  "/:id/tier/clear-override",
+  requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const customer = await getCustomerOrThrow(req.params.id);
+      if (!customer.tier_override_id) {
+        throw new ValidationError("Customer does not have an active manager tier override");
+      }
+
+      const calculatedTierId = customer.calculated_tier_id || customer.tier_id;
+
+      await query(
+        `UPDATE customers
+         SET tier_id = calculated_tier_id,
+             tier_override_id = NULL,
+             tier_override_by = NULL,
+             tier_override_at = NULL,
+             tier_override_reason = NULL,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [customer.id]
+      );
+
+      await query(
+        `INSERT INTO customer_tier_evaluations
+           (customer_id, status, recommended_tier, resolved_tier, input_snapshot, matched_rules, action_by, reason)
+         VALUES ($1, 'CONFIRMED', $2, $2, '{}'::jsonb, '[]'::jsonb, $3, $4)`,
+        [
+          customer.id,
+          customer.calculated_tier_name || customer.tier_name,
+          req.user?.userId ?? null,
+          req.body?.reason || "Manager cleared tier override — reverted to calculated tier",
+        ]
+      );
+
+      await writeAuditLog({
+        entityType: "customer_tier",
+        entityId: customer.id,
+        action: "TIER_OVERRIDE_CLEARED",
+        before: { override_tier: customer.override_tier_name },
+        after: { effective_tier: customer.calculated_tier_name },
+        performedBy: req.user?.userId,
+        reason: "Override cleared",
+      });
+
+      const updated = await getCustomerOrThrow(String(customer.id));
+      res.json({
+        data: {
+          customer_id: Number(customer.id),
+          resolved_tier: updated.tier_name,
+          status: "CONFIRMED",
+          customer: updated,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // GET /customers/:id/tier/evaluations
-// History of evaluate / confirm / override actions for a customer (audit trail).
 customersRouter.get(
   "/:id/tier/evaluations",
   requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER),

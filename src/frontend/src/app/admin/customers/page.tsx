@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
+import { CustomerFormModal, Customer as ModalCustomer } from "@/components/CustomerFormModal";
 
 interface Customer {
   id: number;
@@ -11,6 +12,10 @@ interface Customer {
   company: string;
   status: string;
   tier_name: string;
+  calculated_tier_name?: string;
+  override_tier_name?: string;
+  tier_override_reason?: string;
+  override_by_name?: string;
   currency_code: string;
   customer_type: string;
   expected_po_value: string;
@@ -60,6 +65,7 @@ export default function CustomersPage() {
   const [note, setNote] = useState<string | null>(null);
   const [overrideTier, setOverrideTier] = useState("GOLD");
   const [overrideReason, setOverrideReason] = useState("");
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   const fetchCustomers = async (page = 1) => {
     setLoading(true);
@@ -140,6 +146,23 @@ export default function CustomersPage() {
     }
   };
 
+  const clearOverride = async () => {
+    if (!selected) return;
+    setBusy(true);
+    setNote(null);
+    try {
+      await api.post(`/api/v1/customers/${selected.id}/tier/clear-override`, {});
+      setNote(`Tier override cleared for ${selected.name}. Reverted to calculated tier.`);
+      setSelected(null);
+      setEvaluation(null);
+      fetchCustomers();
+    } catch (err) {
+      setNote("Clear override failed: " + (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const close = () => {
     setSelected(null);
     setEvaluation(null);
@@ -147,11 +170,25 @@ export default function CustomersPage() {
     setOverrideReason("");
   };
 
+  const handleCreateSuccess = (newCust: ModalCustomer) => {
+    setNote(`Customer ${newCust.name} (${newCust.company || "Individual"}) created successfully.`);
+    fetchCustomers(1);
+  };
+
   return (
     <div>
+      <CustomerFormModal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onSuccess={handleCreateSuccess}
+      />
+
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold">Customers Directory</h1>
-        <button className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm">
+        <button
+          onClick={() => setShowCreateModal(true)}
+          className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm font-semibold transition shadow-xs"
+        >
           + Add Customer
         </button>
       </div>
@@ -170,11 +207,11 @@ export default function CustomersPage() {
                 <tr className="border-b text-left text-sm text-gray-500">
                   <th className="p-3">Name</th>
                   <th className="p-3">Email</th>
-                  <th className="p-3">Tier</th>
+                  <th className="p-3">Effective Tier</th>
+                  <th className="p-3">Calculated Tier</th>
                   <th className="p-3">Type</th>
                   <th className="p-3">Expected PO</th>
                   <th className="p-3">Payment Terms</th>
-                  <th className="p-3">Upfront %</th>
                   <th className="p-3">Status</th>
                   <th className="p-3 text-right">Actions</th>
                 </tr>
@@ -184,11 +221,15 @@ export default function CustomersPage() {
                   <tr key={c.id} className="border-b hover:bg-gray-50">
                     <td className="p-3 font-medium">{c.name}</td>
                     <td className="p-3 text-gray-600">{c.email}</td>
-                    <td className="p-3"><span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs">{c.tier_name}</span></td>
+                    <td className="p-3">
+                      <span className={`px-2 py-1 rounded text-xs font-bold ${c.override_tier_name ? "bg-amber-100 text-amber-800 border border-amber-300" : "bg-blue-100 text-blue-700"}`}>
+                        {c.tier_name} {c.override_tier_name ? "(Override)" : ""}
+                      </span>
+                    </td>
+                    <td className="p-3 text-xs text-gray-500">{c.calculated_tier_name || c.tier_name}</td>
                     <td className="p-3 text-sm text-gray-600">{c.customer_type}</td>
                     <td className="p-3 text-sm text-gray-600">{Number(c.expected_po_value).toLocaleString()}</td>
                     <td className="p-3 text-sm text-gray-600"><PaymentLabel value={c.payment_terms} /></td>
-                    <td className="p-3 text-sm text-gray-600">{c.upfront_payment_pct}%</td>
                     <td className="p-3"><span className={`px-2 py-1 rounded text-xs ${c.status === "ACTIVE" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-700"}`}>{c.status}</span></td>
                     <td className="p-3 text-right flex items-center justify-end gap-3">
                       <button
@@ -236,7 +277,25 @@ export default function CustomersPage() {
               <div><span className="text-gray-500">Payment terms:</span> <b><PaymentLabel value={selected.payment_terms} /></b></div>
               <div><span className="text-gray-500">Expected PO value:</span> <b>{Number(selected.expected_po_value).toLocaleString()}</b></div>
               <div><span className="text-gray-500">Upfront payment:</span> <b>{selected.upfront_payment_pct}%</b></div>
+              <div><span className="text-gray-500">Calculated Tier:</span> <b className="text-purple-700">{selected.calculated_tier_name || selected.tier_name}</b></div>
+              <div><span className="text-gray-500">Effective Tier:</span> <b className="text-blue-700">{selected.tier_name}</b></div>
             </div>
+
+            {selected.override_tier_name && (
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-xs flex justify-between items-center">
+                <div>
+                  <span className="font-bold uppercase tracking-wider block text-amber-700">Active Manager Override</span>
+                  <span>Overridden to <b>{selected.override_tier_name}</b> by {selected.override_by_name || "Manager"}. Reason: &quot;{selected.tier_override_reason}&quot;</span>
+                </div>
+                <button
+                  onClick={clearOverride}
+                  disabled={busy}
+                  className="bg-amber-700 text-white px-3 py-1.5 rounded hover:bg-amber-800 text-xs font-bold shrink-0 ml-3"
+                >
+                  Clear Override
+                </button>
+              </div>
+            )}
 
             {busy && <p className="text-sm text-gray-500 mb-3">Evaluating rules...</p>}
 

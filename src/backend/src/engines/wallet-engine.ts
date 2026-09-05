@@ -29,8 +29,10 @@ export async function getOrCreateWallet(
   customerId: number,
   currencyCode = "USD"
 ): Promise<WalletRecord> {
-  const runner = client ?? { query };
-  const existing = await runner.query(
+  const executeQuery = (sql: string, params: any[]) =>
+    client ? client.query(sql, params) : query(sql, params);
+
+  const existing = await executeQuery(
     `SELECT id, customer_id, balance, currency, created_at, updated_at
      FROM customer_credit_wallets
      WHERE customer_id = $1`,
@@ -49,7 +51,7 @@ export async function getOrCreateWallet(
     };
   }
 
-  const insert = await runner.query(
+  const insert = await executeQuery(
     `INSERT INTO customer_credit_wallets (customer_id, balance, currency)
      VALUES ($1, 0, $2)
      RETURNING id, customer_id, balance, currency, created_at, updated_at`,
