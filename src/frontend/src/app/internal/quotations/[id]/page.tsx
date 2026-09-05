@@ -645,20 +645,22 @@ export default function QuotationDetailBuilderPage() {
         <table className="min-w-full divide-y divide-slate-200 text-xs">
           <thead className="bg-slate-100/70 text-slate-600 font-bold uppercase tracking-wider">
             <tr>
-              <th className="px-4 py-3 text-left">Product & Variant</th>
+<th className="px-4 py-3 text-left">Product & Variant</th>
               <th className="px-4 py-3 text-center w-24">Type</th>
+              <th className="px-4 py-3 text-right">Unit Cost</th>
               <th className="px-4 py-3 text-center w-24">Qty</th>
               <th className="px-4 py-3 text-right">Price</th>
               <th className="px-4 py-3 text-center w-24">Discount</th>
               <th className="px-4 py-3 text-center w-32">Limit / Status</th>
               <th className="px-4 py-3 text-right">Line Total</th>
+              <th className="px-4 py-3 text-right">Margin</th>
               <th className="px-4 py-3 text-right">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 bg-white">
             {(quote.lines || []).length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+<td colSpan={10} className="px-4 py-8 text-center text-slate-400">
                   No line items added yet. Click &quot;+ Add Product Line&quot; to begin building this quotation.
                 </td>
               </tr>
@@ -684,7 +686,12 @@ export default function QuotationDetailBuilderPage() {
                       </div>
                     </td>
 
-                    {/* Billing Type */}
+{/* Unit Cost */}
+                    <td className="px-4 py-3 text-right text-slate-500 font-mono">
+                      {quote.currency_code} {Number(line.unit_cost).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </td>
+
+                    {/* Qty Input */}
                     <td className="px-4 py-3 text-center">
                       <span
                         className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
@@ -721,7 +728,6 @@ export default function QuotationDetailBuilderPage() {
                         )}
                       </div>
                     </td>
-
                     {/* Price */}
                     <td className="px-4 py-3 text-right font-semibold text-slate-800 font-mono">
                       {quote.currency_code} {Number(line.unit_price).toLocaleString(undefined, { minimumFractionDigits: 2 })}
@@ -766,6 +772,16 @@ export default function QuotationDetailBuilderPage() {
                       {quote.currency_code} {Number(line.line_total).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </td>
 
+                    {/* Margin */}
+                    <td className="px-4 py-3 text-right">
+                      <div className="font-bold text-emerald-700 font-mono">
+                        {quote.currency_code} {Number(line.line_margin).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        {(Number(line.line_subtotal) > 0 ? (Number(line.line_margin) / Number(line.line_subtotal)) * 100 : 0).toFixed(1)}%
+                      </div>
+                    </td>
+
                     {/* Action */}
                     <td className="px-4 py-3 text-right">
                       <button
@@ -798,7 +814,7 @@ export default function QuotationDetailBuilderPage() {
         </div>
       )}
 
-      {/* Dynamic Upsell and Cross-Sell Suggestions Section */}
+{/* Dynamic Upsell and Cross-Sell Suggestions Section */}
       {activeRecs.length > 0 && (
         <div className="space-y-3">
           <h3 className="text-sm font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
@@ -867,6 +883,16 @@ export default function QuotationDetailBuilderPage() {
             <span className="font-bold text-amber-700">
               -{quote.currency_code} {Number(quote.order_discount_amount || 0).toFixed(2)}
             </span>
+          </div>
+
+          <div>
+            <span className="text-slate-400 block font-semibold">Total Cost</span>
+            <span className="font-bold text-slate-700">{quote.currency_code} {Number(quote.total_cost || 0).toFixed(2)}</span>
+          </div>
+
+          <div>
+            <span className="text-slate-400 block font-semibold">Margin ({Number(quote.margin_pct || 0).toFixed(1)}%)</span>
+            <span className="font-bold text-emerald-700">{quote.currency_code} {Number(quote.margin_amount || 0).toFixed(2)}</span>
           </div>
 
           <div>

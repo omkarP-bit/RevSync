@@ -355,15 +355,67 @@ src/frontend/tailwind.config.ts, postcss.config.js
 
 ---
 
+## Phase 6 — Negotiations
+
+### What was built
+- Shared quotation recalculation/approval machinery extracted into `src/backend/src/shared/quote-workflow.ts` (`fetchQuoteContext`, `fetchLinesWithCategories`, `fetchDiscountRules`, `fetchApprovalRules`, `recalculateAndPersistQuotation`, `createApprovalRequest`, `reopenApprovalAfterEdit`, `RecalcResult`); `quotations.routes.ts` imports these helpers.
+- Internal negotiation workflow (`negotiations.routes.ts`): open a negotiation on an `APPROVED`/`NEGOTIATION` quotation (409 if one open), list/detail with requests + message thread, sales raises requests, Manager/Admin accept/reject, sales messages, close.
+- **Discount acceptance reuses the exact Phase 4 engine pipeline** — applies the requested discount pct to the line, recalculates the quotation, supersedes any open approval request, and issues a fresh approval request when risk != LOW (quote → `PENDING_REAPPROVAL`) or auto-approves when risk is LOW.
+- Customer portal (`negotiationsPortalRouter`, `authenticateCustomer`): list the customer's negotiations (new `GET /api/v1/portal/negotiations`), ownership-checked/sanitized detail, submit requests (DISCOUNT requires a line), post messages. Portal responses never expose `base_cost`, `margin`, `risk_level`, `total_overage`, approval notes, or other customers' data.
+
+### Database tables (migration `007_negotiations.ts`)
+- `negotiations`, `negotiation_requests`, `negotiation_messages`; status CHECK gains `PENDING_REAPPROVAL`; `DISCOUNT` request requires `quotation_line_id`; `requested_by_customer` flag.
+
+### Endpoints
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/api/v1/negotiations` | Open a negotiation (sets quote NEGOTIATION; 409 if open exists; 422 unless APPROVED/NEGOTIATION) |
+| GET | `/api/v1/negotiations` | List (paginated, fixed sort) |
+| GET | `/api/v1/negotiations/:id` | Detail + requests + messages |
+| POST | `/api/v1/negotiations/:id/requests` | Sales raises a request (captures original_value for DISCOUNT) |
+| POST | `/api/v1/negotiations/:id/requests/:requestId/accept` | Manager/Admin only; DISCOUNT applies pct + recalc + auto-reapproval |
+| POST | `/api/v1/negotiations/:id/requests/:requestId/reject` | Manager/Admin only |
+| POST | `/api/v1/negotiations/:id/messages` | Sales message |
+| POST | `/api/v1/negotiations/:id/close` | Manager/Admin only |
+| GET | `/api/v1/portal/negotiations` | Customer list (own data only) |
+| GET | `/api/v1/portal/negotiations/:publicId` | Customer detail (sanitized, ownership-checked) |
+| POST | `/api/v1/portal/negotiations/:publicId/requests` | Customer submits request |
+| POST | `/api/v1/portal/negotiations/:publicId/messages` | Customer message |
+
+### Frontend pages
+| Path | Purpose |
+|------|---------|
+| `/portal` | Customer "My Quotations" list with active negotiations (replaces placeholder) |
+| `/portal/negotiations/[publicId]` | Customer negotiation screen: line items + discounts, request composer (DISCOUNT requires line), message thread, auto-reapproval notice, no margin/risk/base_cost display |
+| `/internal/negotiations` | Sales list + "Open Negotiation" modal |
+| `/internal/negotiations/[id]` | Sales thread: line table, requests with accept/reject (Manager/Admin), message reply, close; "Negotiations" added to `internal/layout.tsx` nav |
+
+### E2E verification
+- Live smoke against throwaway Postgres confirmed: portal list returns only the requesting customer's negotiations, detail GET sanitized (no sensitive fields), quote `PENDING_REAPPROVAL` + fresh HIGH approval after an accepted over-threshold discount (2 → 18%).
+- Full backend suite: **220 tests across 24 files — all passing**; `tsc --noEmit` clean; frontend `next lint` clean (pre-existing warnings only).
+
+### Post-merge reconciliation (origin `672db64`)
+- Merged upstream `order_discount` support onto the stash: `shared/quote-workflow.ts` now threads `orderDiscountPct` into `calculateQuotation`/`evaluateDiscounts` and persists `order_discount_pct`/`order_discount_amount` in the header UPDATE; upfront inline copy of the workflow helpers deleted from `quotations.routes.ts` (shared module is the single source).
+- Frontend quotation builder merges upstream's order-discount UI + variant/type column + dynamic upsell recommendations with the stash's Unit Cost, Margin column, and Total Cost/Margin/Tax footer rows.
+- Parallel 007 migrations reconciled: `007_negotiations` (tables) + `007_order_discount` (quotations columns) both applied to live DB.
+
+### Inventory by location (admin products)
+- Added `GET /api/v1/products/inventory` (ADMIN/WAREHOUSE_MANAGER/FINANCE) returning all product × warehouse stock rows (product, sku, warehouse, location code, qty on hand, reorder threshold), defined before `/:id` so it isn't swallowed as a product id.
+- Products Catalog list page (`admin/products/page.tsx`) now shows an "Inventory by Location" table: SKU, product, warehouse, location code, qty on hand, and a stock-status badge (In Stock / Low (reorder @ n) / Out of Stock).
+- +3 tests (auth, role gate, data shape) → suite **223 / 24**. Backend + frontend `tsc` clean; `next lint` clean (pre-existing warning only).
+
+---
+
 ## Test Coverage Summary
 
 ### Test framework: Vitest
 ### Run command: `npm test` (in src/backend)
-### Total: **195 tests across 23 test files — all passing**
+### Total: **223 tests across 24 test files — all passing**
 
 | Test file | Tests | Covers |
 |-----------|-------|--------|
 | `customerTierEngine.test.ts` | 10 | Tier engine determinism, condition matching (type/PO/upfront/payment terms), explainable reasons, specificity priority, inactive rules ignored |
+| `negotiations.test.ts` | 20 | list/detail/open/conflict/validation/accept-HIGH auto-reapproval/accept-LOW/reject/roles/messages/close, portal GET+list+403+request+message |
 | `customerTier.test.ts` | 9 | Evaluate/confirm/override endpoints, role gating (rep 403 on override), 404s, evaluation history |
 | `quotationEngine.test.ts` | 3 | calculateQuotation calculations, line subtotal/discount/margin, header tax/grand_total/margins |
 | `quotations.test.ts` | 6 | GET/POST quotations, GET /:id with lines, line add/edit/delete recalculation, approval reopen + auto-approve on risk drop |

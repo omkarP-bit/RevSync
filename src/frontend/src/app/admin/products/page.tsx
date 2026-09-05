@@ -22,6 +22,19 @@ interface Category {
   name: string;
 }
 
+interface InventoryLocation {
+  id: number;
+  product_id: number;
+  product_name: string;
+  sku: string;
+  warehouse_id: number;
+  warehouse_name: string;
+  warehouse_code: string;
+  quantity_on_hand: number;
+  reorder_threshold: number;
+  updated_at: string;
+}
+
 export default function AdminProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -43,6 +56,21 @@ export default function AdminProductsPage() {
   const [categoryId, setCategoryId] = useState<number>(0);
   const [productType, setProductType] = useState<"ONE_TIME" | "RECURRING">("ONE_TIME");
   const [baseCost, setBaseCost] = useState<number>(0);
+
+  const [inventory, setInventory] = useState<InventoryLocation[]>([]);
+  const [inventoryLoading, setInventoryLoading] = useState(true);
+
+  const fetchInventory = async () => {
+    setInventoryLoading(true);
+    try {
+      const res = await api.get<ApiResponse<InventoryLocation[]>>("/api/v1/products/inventory");
+      setInventory(res.data);
+    } catch (err: any) {
+      console.error("Failed to load inventory locations", err);
+    } finally {
+      setInventoryLoading(false);
+    }
+  };
 
   const fetchCategories = async () => {
     try {
@@ -79,6 +107,7 @@ export default function AdminProductsPage() {
 
   useEffect(() => {
     fetchCategories();
+    fetchInventory();
   }, []);
 
   useEffect(() => {
@@ -253,6 +282,76 @@ export default function AdminProductsPage() {
               Next
             </button>
           </div>
+        </div>
+      </div>
+
+      {/* Inventory Locations Table */}
+      <div className="bg-white rounded-lg shadow overflow-hidden border border-gray-200">
+        <div className="px-6 py-3 border-b border-gray-200 flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Inventory by Location</h2>
+            <p className="text-xs text-gray-500">Which warehouse holds which product, with current stock levels.</p>
+          </div>
+          <span className="text-xs text-gray-500">{inventory.length} stock locations</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">SKU</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Product Name</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Warehouse</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Location Code</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Qty On Hand</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock Status</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200 text-sm">
+              {inventoryLoading ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-4 text-center text-gray-500">
+                    Loading inventory locations...
+                  </td>
+                </tr>
+              ) : inventory.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-4 text-center text-gray-500">
+                    No inventory locations found.
+                  </td>
+                </tr>
+              ) : (
+                inventory.map((inv) => {
+                  const lowStock = inv.quantity_on_hand <= inv.reorder_threshold;
+                  return (
+                    <tr key={inv.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 font-mono text-xs text-gray-700">{inv.sku}</td>
+                      <td className="px-6 py-4 font-medium text-gray-900">{inv.product_name}</td>
+                      <td className="px-6 py-4 text-gray-600">{inv.warehouse_name}</td>
+                      <td className="px-6 py-4 font-mono text-xs text-gray-500">{inv.warehouse_code}</td>
+                      <td className="px-6 py-4 font-semibold text-gray-800">{inv.quantity_on_hand}</td>
+                      <td className="px-6 py-4">
+                        <span
+                          className={`px-2 py-0.5 text-xs font-semibold rounded-full ${
+                            lowStock
+                              ? "bg-red-100 text-red-700"
+                              : inv.quantity_on_hand === 0
+                              ? "bg-gray-100 text-gray-600"
+                              : "bg-green-100 text-green-800"
+                          }`}
+                        >
+                          {inv.quantity_on_hand === 0
+                            ? "Out of Stock"
+                            : lowStock
+                            ? `Low (reorder @ ${inv.reorder_threshold})`
+                            : "In Stock"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

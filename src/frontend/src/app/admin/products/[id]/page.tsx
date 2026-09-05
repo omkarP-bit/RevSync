@@ -64,10 +64,10 @@ export default function ProductDetailPage() {
 
   // Variant Modal
   const [showVariantModal, setShowVariantModal] = useState(false);
+  const [editingVariant, setEditingVariant] = useState<Variant | null>(null);
   const [varSku, setVarSku] = useState("");
   const [varName, setVarName] = useState("");
-  const [varAttrKey, setVarAttrKey] = useState("pack");
-  const [varAttrVal, setVarAttrVal] = useState("Standard");
+  const [varAttrs, setVarAttrs] = useState<{ key: string; value: string }[]>([]);
 
   // Relationship Form
   const [showRelModal, setShowRelModal] = useState(false);
@@ -106,21 +106,59 @@ export default function ProductDetailPage() {
     }
   }, [productId]);
 
-  const handleAddVariant = async (e: React.FormEvent) => {
+  const attrsToObject = (attrs: { key: string; value: string }[]) => {
+    const obj: Record<string, any> = {};
+    for (const a of attrs) {
+      if (a.key.trim()) obj[a.key.trim()] = a.value.trim();
+    }
+    return obj;
+  };
+
+  const openAddVariant = () => {
+    setEditingVariant(null);
+    setVarSku("");
+    setVarName("");
+    setVarAttrs([{ key: "", value: "" }]);
+    setShowVariantModal(true);
+  };
+
+  const openEditVariant = (v: Variant) => {
+    setEditingVariant(v);
+    setVarSku(v.sku);
+    setVarName(v.name);
+    const entries = Object.entries(v.attributes ?? {});
+    setVarAttrs(entries.length > 0 ? entries.map(([key, value]) => ({ key, value: String(value) })) : [{ key: "", value: "" }]);
+    setShowVariantModal(true);
+  };
+
+  const handleSaveVariant = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await api.post(`/api/v1/products/${productId}/variants`, {
-        sku: varSku,
-        name: varName,
-        attributes: { [varAttrKey]: varAttrVal },
-      });
+      const payload = { sku: varSku, name: varName, attributes: attrsToObject(varAttrs) };
+      if (editingVariant) {
+        await api.patch(`/api/v1/products/${productId}/variants/${editingVariant.id}`, payload);
+      } else {
+        await api.post(`/api/v1/products/${productId}/variants`, payload);
+      }
 
       setShowVariantModal(false);
+      setEditingVariant(null);
       setVarSku("");
       setVarName("");
+      setVarAttrs([{ key: "", value: "" }]);
       fetchProductDetail();
     } catch (err: any) {
-      alert(err.message || "Failed to add variant");
+      alert(err.message || "Failed to save variant");
+    }
+  };
+
+  const handleDeleteVariant = async (v: Variant) => {
+    if (!confirm(`Delete variant "${v.name}" (${v.sku})?`)) return;
+    try {
+      await api.request(`/api/v1/products/${productId}/variants/${v.id}`, { method: "DELETE" });
+      fetchProductDetail();
+    } catch (err: any) {
+      alert(err.message || "Failed to delete variant");
     }
   };
 
@@ -180,7 +218,7 @@ export default function ProductDetailPage() {
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-bold text-gray-900">Product Variants ({product.variants.length})</h2>
             <button
-              onClick={() => setShowVariantModal(true)}
+              onClick={openAddVariant}
               className="bg-purple-50 text-purple-700 border border-purple-200 px-3 py-1 rounded text-xs font-medium hover:bg-purple-100"
             >
               + Add Variant
@@ -192,14 +230,43 @@ export default function ProductDetailPage() {
           ) : (
             <div className="space-y-2">
               {product.variants.map((v) => (
-                <div key={v.id} className="p-3 border rounded-md bg-gray-50 flex justify-between items-center text-xs">
-                  <div>
-                    <div className="font-semibold text-gray-800">{v.name}</div>
-                    <div className="font-mono text-gray-500">{v.sku}</div>
+                <div key={v.id} className="p-3 border rounded-md bg-gray-50 text-xs">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <div className="font-semibold text-gray-800">{v.name}</div>
+                      <div className="font-mono text-gray-500">{v.sku}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => openEditVariant(v)}
+                        className="text-blue-600 hover:text-blue-800 font-medium"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleDeleteVariant(v)}
+                        className="text-red-500 hover:text-red-700 font-medium"
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
-                  <div className="text-gray-600 bg-white px-2 py-1 border rounded">
-                    {JSON.stringify(v.attributes)}
-                  </div>
+                  {Object.keys(v.attributes ?? {}).length > 0 ? (
+                    <div className="mt-2 overflow-x-auto border rounded bg-white">
+                      <table className="min-w-full divide-y divide-gray-100">
+                        <tbody className="divide-y divide-gray-100">
+                          {Object.entries(v.attributes).map(([k, val]) => (
+                            <tr key={k}>
+                              <td className="px-2 py-1 font-medium text-gray-600 w-1/3 capitalize">{k}</td>
+                              <td className="px-2 py-1 font-mono text-gray-800">{String(val)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-gray-400">No attributes</div>
+                  )}
                 </div>
               ))}
             </div>
@@ -280,8 +347,10 @@ export default function ProductDetailPage() {
       {showVariantModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 max-w-md w-full shadow-xl">
-            <h2 className="text-lg font-bold mb-4">Add Variant to {product.name}</h2>
-            <form onSubmit={handleAddVariant} className="space-y-4">
+            <h2 className="text-lg font-bold mb-4">
+              {editingVariant ? `Edit Variant: ${editingVariant.name}` : `Add Variant to ${product.name}`}
+            </h2>
+            <form onSubmit={handleSaveVariant} className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">Variant SKU</label>
                 <input
@@ -304,24 +373,52 @@ export default function ProductDetailPage() {
                   className="w-full border rounded px-3 py-2 text-sm"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Attribute Key</label>
-                  <input
-                    type="text"
-                    value={varAttrKey}
-                    onChange={(e) => setVarAttrKey(e.target.value)}
-                    className="w-full border rounded px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Attribute Value</label>
-                  <input
-                    type="text"
-                    value={varAttrVal}
-                    onChange={(e) => setVarAttrVal(e.target.value)}
-                    className="w-full border rounded px-3 py-2 text-sm"
-                  />
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-2">
+                  Attributes
+                  <button
+                    type="button"
+                    onClick={() => setVarAttrs((prev) => [...prev, { key: "", value: "" }])}
+                    className="ml-2 text-purple-600 hover:text-purple-800 text-xs font-medium"
+                  >
+                    + Add Attribute
+                  </button>
+                </label>
+                <div className="space-y-2">
+                  {varAttrs.map((attr, i) => (
+                    <div key={i} className="grid grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        placeholder="Key (e.g. tier)"
+                        value={attr.key}
+                        onChange={(e) =>
+                          setVarAttrs((prev) => prev.map((a, idx) => (idx === i ? { ...a, key: e.target.value } : a)))
+                        }
+                        className="w-full border rounded px-3 py-2 text-sm"
+                      />
+                      <div className="flex gap-1">
+                        <input
+                          type="text"
+                          placeholder="Value (e.g. standard)"
+                          value={attr.value}
+                          onChange={(e) =>
+                            setVarAttrs((prev) => prev.map((a, idx) => (idx === i ? { ...a, value: e.target.value } : a)))
+                          }
+                          className="w-full border rounded px-3 py-2 text-sm"
+                        />
+                        {varAttrs.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setVarAttrs((prev) => prev.filter((_, idx) => idx !== i))}
+                            className="text-red-500 hover:text-red-700 text-sm px-1"
+                            title="Remove attribute"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
               <div className="flex justify-end gap-2 pt-2">
@@ -333,7 +430,7 @@ export default function ProductDetailPage() {
                   Cancel
                 </button>
                 <button type="submit" className="px-4 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700">
-                  Save Variant
+                  {editingVariant ? "Save Changes" : "Save Variant"}
                 </button>
               </div>
             </form>

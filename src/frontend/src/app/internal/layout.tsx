@@ -15,6 +15,7 @@ const navItems = [
   { label: "Dashboard", href: "/internal", adminOnly: false },
   { label: "Quotations", href: "/internal/quotations", adminOnly: false },
   { label: "Approvals", href: "/internal/approvals", adminOnly: false },
+  { label: "Negotiations", href: "/internal/negotiations", adminOnly: false },
   { label: "Fulfillment", href: "/internal/fulfillment", adminOnly: false },
   { label: "Subscriptions", href: "/internal/subscriptions", adminOnly: false },
   { label: "Invoices", href: "/internal/invoices", adminOnly: false },

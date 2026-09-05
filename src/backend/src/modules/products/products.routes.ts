@@ -97,6 +97,38 @@ productsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MA
   }
 });
 
+// GET /api/v1/products/inventory (all product x warehouse stock locations)
+productsRouter.get("/inventory", requireRole(ROLES.ADMIN, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await query(
+      `SELECT ii.id, ii.product_id, p.name AS product_name, p.sku,
+              ii.warehouse_id, w.name AS warehouse_name, w.code AS warehouse_code,
+              ii.quantity_on_hand, ii.reorder_threshold, ii.updated_at
+       FROM inventory_items ii
+       JOIN products p ON ii.product_id = p.id
+       JOIN warehouses w ON ii.warehouse_id = w.id
+       ORDER BY p.name ASC, w.name ASC`
+    );
+
+    const inventory = result.rows.map((row) => ({
+      id: Number(row.id),
+      product_id: Number(row.product_id),
+      product_name: row.product_name,
+      sku: row.sku,
+      warehouse_id: Number(row.warehouse_id),
+      warehouse_name: row.warehouse_name,
+      warehouse_code: row.warehouse_code,
+      quantity_on_hand: Number(row.quantity_on_hand),
+      reorder_threshold: Number(row.reorder_threshold),
+      updated_at: row.updated_at,
+    }));
+
+    res.json({ data: inventory, meta: { total: inventory.length } });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/v1/products/:id
 productsRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE, ROLES.WAREHOUSE_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -238,6 +270,60 @@ productsRouter.post("/:id/variants", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGE
 
     const row = result.rows[0];
     res.status(201).json({ data: { ...row, id: Number(row.id), product_id: Number(row.product_id) } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/v1/products/:id/variants/:variantId (Admin, Sales Manager, Warehouse Manager, Finance)
+productsRouter.patch("/:id/variants/:variantId", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id, variantId } = req.params;
+    const fields = variantSchema.partial().parse(req.body);
+    const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
+
+    if (entries.length === 0) {
+      throw new ValidationError("No fields to update");
+    }
+
+    const setClauses = entries
+      .map(([key], i) => `${key === "attributes" ? `attributes = $${i + 1}` : `${key} = $${i + 1}`}`);
+
+    const values = entries.map(([, v]) =>
+      typeof v === "object" && v !== null && !Array.isArray(v) && v.constructor === Object ? JSON.stringify(v) : v
+    );
+
+    const result = await query(
+      `UPDATE product_variants SET ${setClauses.join(", ")}, updated_at = NOW()
+       WHERE id = $${entries.length + 1} AND product_id = $${entries.length + 2}
+       RETURNING *`,
+      [...values, variantId, id]
+    );
+
+    if (result.rows.length === 0) {
+      throw new NotFoundError("Product variant", variantId);
+    }
+
+    const row = result.rows[0];
+    res.json({ data: { ...row, id: Number(row.id), product_id: Number(row.product_id) } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/v1/products/:id/variants/:variantId (Admin, Sales Manager, Warehouse Manager, Finance)
+productsRouter.delete("/:id/variants/:variantId", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id, variantId } = req.params;
+    const result = await query(
+      `DELETE FROM product_variants WHERE id = $1 AND product_id = $2 RETURNING id`,
+      [variantId, id]
+    );
+    if (result.rows.length === 0) {
+      throw new NotFoundError("Product variant", variantId);
+    }
+
+    res.status(200).json({ data: { id: Number(result.rows[0].id), deleted: true } });
   } catch (err) {
     next(err);
   }

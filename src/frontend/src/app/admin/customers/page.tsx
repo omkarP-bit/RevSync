@@ -33,6 +33,23 @@ interface TierEvaluation {
 
 const TIERS = ["BRONZE", "SILVER", "GOLD"];
 
+const PAYMENT_TERMS: Record<string, { label: string; hint: string }> = {
+  NET_15: { label: "Net 15", hint: "Customer pays in full within 15 days of invoice date" },
+  NET_30: { label: "Net 30", hint: "Customer pays in full within 30 days of invoice date" },
+  NET_60: { label: "Net 60", hint: "Customer pays in full within 60 days of invoice date" },
+  ADVANCE: { label: "Advance", hint: "Customer pays the full amount before delivery" },
+  COD: { label: "Cash on Delivery", hint: "Customer pays at the point of delivery" },
+};
+
+function PaymentLabel({ value }: { value: string }) {
+  const info = PAYMENT_TERMS[value] ?? { label: value, hint: "Custom payment terms" };
+  return (
+    <span title={`${info.label}: ${info.hint}`} className="underline decoration-dotted underline-offset-2 cursor-help">
+      {info.label}
+    </span>
+  );
+}
+
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [meta, setMeta] = useState({ page: 1, limit: 20, total: 0, total_pages: 0 });
@@ -156,7 +173,7 @@ export default function CustomersPage() {
                   <th className="p-3">Tier</th>
                   <th className="p-3">Type</th>
                   <th className="p-3">Expected PO</th>
-                  <th className="p-3">Payment</th>
+                  <th className="p-3">Payment Terms</th>
                   <th className="p-3">Upfront %</th>
                   <th className="p-3">Status</th>
                   <th className="p-3 text-right">Actions</th>
@@ -170,7 +187,7 @@ export default function CustomersPage() {
                     <td className="p-3"><span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs">{c.tier_name}</span></td>
                     <td className="p-3 text-sm text-gray-600">{c.customer_type}</td>
                     <td className="p-3 text-sm text-gray-600">{Number(c.expected_po_value).toLocaleString()}</td>
-                    <td className="p-3 text-sm text-gray-600">{c.payment_terms}</td>
+                    <td className="p-3 text-sm text-gray-600"><PaymentLabel value={c.payment_terms} /></td>
                     <td className="p-3 text-sm text-gray-600">{c.upfront_payment_pct}%</td>
                     <td className="p-3"><span className={`px-2 py-1 rounded text-xs ${c.status === "ACTIVE" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-700"}`}>{c.status}</span></td>
                     <td className="p-3 text-right flex items-center justify-end gap-3">
@@ -216,7 +233,7 @@ export default function CustomersPage() {
 
             <div className="grid grid-cols-2 gap-3 mb-4 text-sm bg-gray-50 p-4 rounded-lg">
               <div><span className="text-gray-500">Type:</span> <b>{selected.customer_type}</b></div>
-              <div><span className="text-gray-500">Payment terms:</span> <b>{selected.payment_terms}</b></div>
+              <div><span className="text-gray-500">Payment terms:</span> <b><PaymentLabel value={selected.payment_terms} /></b></div>
               <div><span className="text-gray-500">Expected PO value:</span> <b>{Number(selected.expected_po_value).toLocaleString()}</b></div>
               <div><span className="text-gray-500">Upfront payment:</span> <b>{selected.upfront_payment_pct}%</b></div>
             </div>
