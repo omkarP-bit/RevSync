@@ -48,6 +48,7 @@ async function main() {
     await getPool().query("ALTER TABLE invoices ALTER COLUMN quotation_id DROP NOT NULL").catch(() => {});
     await getPool().query("ALTER TABLE invoice_payments DROP CONSTRAINT IF EXISTS invoice_payments_payment_method_check").catch(() => {});
     await getPool().query("ALTER TABLE invoice_payments ADD CONSTRAINT invoice_payments_payment_method_check CHECK (payment_method IN ('CASH', 'BANK_TRANSFER', 'CARD', 'CHECK', 'CREDIT_WALLET', 'OTHER'))").catch(() => {});
+    await getPool().query("CREATE INDEX IF NOT EXISTS idx_audit_logs_timeline ON audit_logs (entity_type, entity_id, created_at DESC)").catch(() => {});
     logger.info("Database connected");
   } catch (err) {
     logger.error("Database connection failed");
