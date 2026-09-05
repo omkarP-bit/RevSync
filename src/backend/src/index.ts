@@ -21,6 +21,7 @@ import { discountsRouter } from "./modules/discounts/discounts.routes.js";
 import { approvalsRouter } from "./modules/approvals/approvals.routes.js";
 import { warehousesRouter, fulfillmentRouter } from "./modules/fulfillment/fulfillment.routes.js";
 import { negotiationsRouter, negotiationsPortalRouter } from "./modules/negotiations/negotiations.routes.js";
+import { invoicesRouter, creditNotesRouter, invoicesPortalRouter } from "./modules/billing/billing.routes.js";
 
 async function main() {
   const config = loadConfig();
@@ -58,6 +59,9 @@ async function main() {
   app.use("/api/v1/fulfillment", fulfillmentRouter);
   app.use("/api/v1/negotiations", negotiationsRouter);
   app.use("/api/v1/portal/negotiations", negotiationsPortalRouter);
+  app.use("/api/v1/invoices", invoicesRouter);
+  app.use("/api/v1/credit-notes", creditNotesRouter);
+  app.use("/api/v1/portal/invoices", invoicesPortalRouter);
 
   app.use(errorHandler);
 

@@ -406,11 +406,47 @@ src/frontend/tailwind.config.ts, postcss.config.js
 
 ---
 
+## Phase 7 — Invoicing & Billing
+
+**Status:** COMPLETED
+**Date:** 2026-09-05
+
+### What was built
+- Migration `008_billing.ts`: `invoices`, `invoice_lines`, `invoice_payments`, `credit_notes` tables + indexes. Invoices are generated from a `CONFIRMED` quotation, one invoice per quotation (UNIQUE `quotation_id`). All of the quotation's lines are invoiced as a snapshot (both one-time and recurring) — recurring subscriptions are handled separately in Phase 8.
+- Invoice numbers `INV-YYYY-XXXX`; payment idempotency via UNIQUE `reference` (replaying the same reference on the same invoice returns the existing payment).
+- Totals recomputed through `calculateQuotation` from the quotation's lines using its `tax_rate_pct` and `order_discount_pct`. Due date derived from `customers.payment_terms`: `NET_15/30/60` → +15/30/60 days, `ADVANCE`/`COD` → due immediately.
+- Invoice lifecycle: `ISSUED → PARTIALLY_PAID → PAID` (crossing grand_total flips to PAID), `CANCELLED` only when no payments. Credit notes against issued invoices (customer must match invoice customer).
+- Billing module (`billing.routes.ts`): internal routers + customer portal router (`authenticateCustomer`, ownership-checked, sanitized — no cost/margin fields).
+- Frontend screens: `/internal/invoices` list (status filter tabs, pagination, Generate Invoice modal from billable quotations) and `/internal/invoices/[id]` detail (line items with totals breakdown, payments table, Record Payment + Issue Credit Note modals, Cancel). Customer portal `/portal/invoices` list + `/portal/invoices/[publicId]` detail, with "Invoices" added to portal nav.
+- Generate Invoice modal lists **every CONFIRMED quotation** that has no invoice yet (recurring-only included), and generation invoices all of the quotation's lines.
+
+### Endpoints
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/api/v1/invoices` | Generate from CONFIRMED quotation (Admin/Finance; 409 if exists, 422 if not confirmed / no lines) |
+| GET | `/api/v1/invoices` | List (paginated, status/customer filters) |
+| GET | `/api/v1/invoices/billable-quotations` | All CONFIRMED quotations without an invoice |
+| GET | `/api/v1/invoices/:id` | Detail with lines, payments, credit notes |
+| POST | `/api/v1/invoices/:id/payments` | Record payment (idempotent by reference; 422 on cancelled) |
+| POST | `/api/v1/invoices/:id/cancel` | Cancel (Admin/Finance; 422 if PAID) |
+| GET | `/api/v1/credit-notes` | List credit notes |
+| POST | `/api/v1/credit-notes` | Issue credit note (customer must match invoice; 422 on cancelled invoice) |
+| GET | `/api/v1/portal/invoices` | Customer's own invoices (sanitized) |
+| GET | `/api/v1/portal/invoices/:publicId` | Customer invoice detail (sanitized, ownership-checked) |
+
+### E2E verification
+- Live smoke against the dev DB: generated `INV-2026-0001` from QT-2026-0007 (grand total 33000, due +30d for NET_30), recorded a partial payment (status PARTIALLY_PAID, `total_paid` correct), a second payment flipping to PAID, verified idempotent replay (`idempotent_replay: true`, no dup row), and confirmed a PAID invoice cannot be cancelled. Test rows cleaned up after.
+- Second pass: Generate Invoice modal now lists **all 5 confirmed quotations** (recurring-only 0003/0004/0005/0008 included); generated `INV-2026-0001` from recurring-only QT-2026-0003 ($1623.60, 1 line). Cleaned up after.
+- Two live bugs caught & fixed during smoke: (1) `WHERE i.id = $1 OR i.public_id::text = $1` fails (same param can't be both bigint and text) — lookups now numeric-only; (2) `"0.0000" + 20000` string concat before `.toFixed(4)` silently zeroed `total_paid` — both operands now `Number()`-coerced.
+- Full backend suite: **245 / 25 files — all passing**; backend + frontend `tsc` clean; `next lint` clean (pre-existing warnings only).
+
+---
+
 ## Test Coverage Summary
 
 ### Test framework: Vitest
 ### Run command: `npm test` (in src/backend)
-### Total: **223 tests across 24 test files — all passing**
+### Total: **245 tests across 25 test files — all passing**
 
 | Test file | Tests | Covers |
 |-----------|-------|--------|
@@ -426,6 +462,7 @@ src/frontend/tailwind.config.ts, postcss.config.js
 | `fulfillmentEngine.test.ts` | 8 | allocation ranking/splitting/ties/backorder, stock consumption, status mapping |
 | `fulfillment.test.ts` | 18 | warehouses + inventory CRUD, order create/backorder, override (+over-allocation 422, reallocation/removal), ship (+insufficient stock 409), cancel, role checks |
 | `pricingEngine.test.ts` | 3 | resolveUnitPrice resolution, case-insensitivity, missing match fallback |
+| `billing.test.ts` | 22 | invoice generation (CONFIRMED guard, recurring-only all-lines invoice, 409 dup, 422 non-confirmed/no lines), auth+role gates, list+pagination, billable-quotations (all confirmed), detail (lines/payments/credit notes), payments (partial→PAID, cancelled 422, idempotent replay), cancel (paid 422), credit note list+create, portal list/ownership-404/sanitized detail |
 | `products.test.ts` | 5 | GET /products (pagination, default sort), base_cost security serialization, POST /products role check |
 | `pricelists.test.ts` | 3 | GET /pricelists (pagination, sort), POST /pricelists, POST /pricelists/:id/items price updates |
 | `errors.test.ts` | 12 | AppError, NotFoundError, UnauthorizedError, ForbiddenError, ConflictError, ValidationError |

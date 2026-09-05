@@ -75,7 +75,7 @@ async function loadInvoice(id: string | number): Promise<any> {
      JOIN customers c ON i.customer_id = c.id
      JOIN quotations q ON i.quotation_id = q.id
      LEFT JOIN users u ON q.sales_rep_id = u.id
-     WHERE i.id = $1 OR i.public_id::text = $1`,
+     WHERE i.id = $1`,
     [id]
   );
   if (result.rows.length === 0) {
@@ -234,7 +234,7 @@ invoicesRouter.get("/", requireRole(ROLES.ADMIN, ROLES.FINANCE, ROLES.SALES_MANA
   }
 });
 
-// GET /api/v1/invoices/billable-quotations — CONFIRMED quotes not yet invoiced, with one-time lines
+// GET /api/v1/invoices/billable-quotations — confirmed quotes not yet invoiced
 invoicesRouter.get("/billable-quotations", requireRole(ROLES.ADMIN, ROLES.FINANCE, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await query(
@@ -244,10 +244,6 @@ invoicesRouter.get("/billable-quotations", requireRole(ROLES.ADMIN, ROLES.FINANC
        JOIN customers c ON q.customer_id = c.id
        WHERE q.status = 'CONFIRMED'
          AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.quotation_id = q.id)
-         AND EXISTS (
-           SELECT 1 FROM quotation_lines ql JOIN products p ON ql.product_id = p.id
-           WHERE ql.quotation_id = q.id AND p.product_type = 'ONE_TIME'
-         )
        ORDER BY q.created_at ASC`
     );
     res.json({
@@ -265,7 +261,7 @@ invoicesRouter.get("/billable-quotations", requireRole(ROLES.ADMIN, ROLES.FINANC
   }
 });
 
-// POST /api/v1/invoices — generate an invoice from a CONFIRMED quotation (one-time lines only)
+// POST /api/v1/invoices — generate an invoice from a CONFIRMED quotation (all lines)
 invoicesRouter.post("/", requireRole(ROLES.ADMIN, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = (req as any).user.userId;
@@ -297,17 +293,17 @@ invoicesRouter.post("/", requireRole(ROLES.ADMIN, ROLES.FINANCE), async (req: Re
               ql.applied_discount_pct, p.name AS product_name, p.sku, p.product_type
        FROM quotation_lines ql
        JOIN products p ON ql.product_id = p.id
-       WHERE ql.quotation_id = $1 AND p.product_type = 'ONE_TIME'
+       WHERE ql.quotation_id = $1
        ORDER BY ql.id ASC`,
       [data.quotation_id]
     );
-    const oneTimeLines = linesResult.rows;
-    if (oneTimeLines.length === 0) {
-      throw new UnprocessableEntityError("Quotation has no one-time lines to invoice");
+    const quoteLines = linesResult.rows;
+    if (quoteLines.length === 0) {
+      throw new UnprocessableEntityError("Quotation has no lines to invoice");
     }
 
     const calc = calculateQuotation(
-      oneTimeLines.map((row: any) => ({
+      quoteLines.map((row: any) => ({
         product_id: Number(row.product_id),
         quantity: Number(row.quantity),
         unit_price: Number(row.unit_price),
@@ -348,7 +344,7 @@ invoicesRouter.post("/", requireRole(ROLES.ADMIN, ROLES.FINANCE), async (req: Re
       );
       const invoiceId = insertResult.rows[0].id;
 
-      for (const line of oneTimeLines) {
+      for (const line of quoteLines) {
         const calcLine = calc.lines.find((l) => Number(l.product_id) === Number(line.product_id));
         await client.query(
           `INSERT INTO invoice_lines
@@ -388,7 +384,7 @@ invoicesRouter.post("/", requireRole(ROLES.ADMIN, ROLES.FINANCE), async (req: Re
             invoice_number: invoiceNumber,
             quotation_id: Number(data.quotation_id),
             grand_total: Number(calc.grand_total),
-            line_count: oneTimeLines.length,
+            line_count: quoteLines.length,
           }),
           userId,
           "Generated from confirmed quotation",
@@ -449,7 +445,7 @@ invoicesRouter.post("/:id/payments", requireRole(ROLES.ADMIN, ROLES.FINANCE), as
       throw new ConflictError("Payment reference already used on a different invoice");
     }
 
-    const newTotalPaid = Number(Number(invoice.total_paid + data.amount_paid).toFixed(4));
+    const newTotalPaid = Number((Number(invoice.total_paid) + Number(data.amount_paid)).toFixed(4));
     const newStatus =
       newTotalPaid >= Number(invoice.grand_total) - 0.005 ? "PAID" : "PARTIALLY_PAID";
 
