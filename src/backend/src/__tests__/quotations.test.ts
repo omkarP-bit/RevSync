@@ -345,4 +345,19 @@ describe("Quotations routes", () => {
       expect(db.query).toHaveBeenCalledTimes(19);
     });
   });
+
+  describe("CONFIRMED quotation hard lock", () => {
+    it("returns 409 Conflict when attempting to edit a CONFIRMED quotation", async () => {
+      vi.mocked(db.query).mockResolvedValueOnce(qr([ctxRow({ status: "CONFIRMED" })]));
+
+      const res = await request(app)
+        .patch("/api/v1/quotations/1")
+        .set("Authorization", `Bearer ${repToken()}`)
+        .send({ order_discount_pct: 5 });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe("CONFLICT");
+      expect(res.body.error.message).toContain("locked and cannot be modified");
+    });
+  });
 });

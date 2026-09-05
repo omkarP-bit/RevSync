@@ -21,7 +21,7 @@ const decisionSchema = z.object({
 });
 
 // GET /api/v1/approvals
-approvalsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+approvalsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.FINANCE, ROLES.SALES_REP), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
@@ -34,6 +34,11 @@ approvalsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.FIN
     if (req.query.status) {
       where.push(`ar.status = $${paramIdx++}`);
       params.push(req.query.status);
+    }
+
+    if (req.query.quotation_id) {
+      where.push(`ar.quotation_id = $${paramIdx++}`);
+      params.push(req.query.quotation_id);
     }
 
     const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
@@ -54,7 +59,7 @@ approvalsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.FIN
        JOIN users su ON ar.submitted_by = su.id
        LEFT JOIN users du ON ar.decided_by = du.id
        ${whereClause}
-       ORDER BY ar.created_at ASC
+       ORDER BY ar.submitted_at DESC
        LIMIT $${paramIdx++} OFFSET $${paramIdx++}`,
       [...params, limit, offset]
     );
@@ -116,7 +121,7 @@ approvalsRouter.get("/rules", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER), asy
 });
 
 // GET /api/v1/approvals/:id
-approvalsRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+approvalsRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.FINANCE, ROLES.SALES_REP), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
 

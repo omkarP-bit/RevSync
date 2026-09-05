@@ -1,8 +1,56 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { query } from "../../database/pool.js";
+import { query, withTransaction } from "../../database/pool.js";
 import { authenticate, requireRole, ROLES } from "../../middleware/auth.js";
-import { NotFoundError, ValidationError, UnprocessableEntityError } from "../../shared/errors.js";
+import { NotFoundError, ValidationError, UnprocessableEntityError, ConflictError } from "../../shared/errors.js";
 import { writeAuditLog } from "../../shared/audit.js";
+
+function assertQuotationNotConfirmed(status: string): void {
+  if (status === "CONFIRMED") {
+    throw new ConflictError("Confirmed quotations are locked and cannot be modified.");
+  }
+}
+
+async function handleCommercialMutationOnApproved(
+  quotationId: number | string,
+  currentStatus: string,
+  userId: number,
+  reasonDetail: string
+): Promise<void> {
+  if (currentStatus === "APPROVED") {
+    await withTransaction(async (client) => {
+      await client.query(`UPDATE quotations SET status = 'NEGOTIATION', updated_at = NOW() WHERE id = $1`, [quotationId]);
+      const openApproval = await client.query(
+        `SELECT id FROM approval_requests WHERE quotation_id = $1 AND status = 'PENDING_APPROVAL'`,
+        [quotationId]
+      );
+      for (const req of openApproval.rows) {
+        await client.query(
+          `UPDATE approval_requests SET status = 'CANCELLED', decided_by = $2, decided_at = NOW(), notes = $3 WHERE id = $1`,
+          [req.id, userId, `Commercial modification (${reasonDetail}); approval superseded`]
+        );
+        await writeAuditLog({
+          entityType: "approval_requests",
+          entityId: req.id,
+          action: "CANCELLED",
+          before: { status: "PENDING_APPROVAL" },
+          after: { status: "CANCELLED" },
+          performedBy: userId,
+          reason: `Approval invalidated due to commercial change (${reasonDetail})`,
+        });
+      }
+      await writeAuditLog({
+        entityType: "quotations",
+        entityId: quotationId,
+        action: "NEGOTIATION",
+        before: { status: "APPROVED" },
+        after: { status: "NEGOTIATION" },
+        performedBy: userId,
+        reason: `Commercial modification (${reasonDetail}) invalidated APPROVED status`,
+      });
+    });
+  }
+}
+import { calculateQuotation } from "../../engines/quotation-engine.js";
 import { evaluateDiscounts } from "../../engines/discount-engine.js";
 import { resolveUnitPrice } from "../../engines/pricing-engine.js";
 import {
@@ -294,6 +342,15 @@ quotationsRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.S
     const { quote } = await fetchQuoteContext(id);
     const realId = quote.id;
 
+    assertQuotationNotConfirmed(quote.status);
+
+    const commercialKeys = ["customer_id", "tax_rate_pct", "order_discount_pct"];
+    const isCommercialUpdate = Object.keys(fields).some((k) => commercialKeys.includes(k));
+    if (isCommercialUpdate) {
+      const detail = Object.keys(fields).filter((k) => commercialKeys.includes(k)).join(", ");
+      await handleCommercialMutationOnApproved(realId, quote.status, userId, detail);
+    }
+
     if (fields.status) {
       const targetStatus = fields.status;
       const forbiddenDirect = ["PENDING_APPROVAL", "APPROVED", "REJECTED"];
@@ -393,8 +450,10 @@ quotationsRouter.post("/:id/submit", requireRole(ROLES.ADMIN, ROLES.SALES_REP, R
     const quoteId = header.id;
     const currentStatus = header.status;
 
-    if (currentStatus !== "DRAFT" && currentStatus !== "NEGOTIATION") {
-      throw new UnprocessableEntityError("Only DRAFT or NEGOTIATION quotations can be submitted for approval");
+    assertQuotationNotConfirmed(currentStatus);
+
+    if (currentStatus !== "DRAFT" && currentStatus !== "NEGOTIATION" && currentStatus !== "REJECTED") {
+      throw new UnprocessableEntityError("Only DRAFT, NEGOTIATION, or REJECTED quotations can be submitted for approval");
     }
 
     if (risk_level === "LOW") {
@@ -446,7 +505,7 @@ quotationsRouter.post("/:id/lines", requireRole(ROLES.ADMIN, ROLES.SALES_REP, RO
 
     // Fetch quote detail for customer tier & currency
     const quoteResult = await query(
-      `SELECT q.id, q.currency_code, c.tier_id as customer_tier_id
+      `SELECT q.id, q.currency_code, q.status, c.tier_id as customer_tier_id
        FROM quotations q
        JOIN customers c ON q.customer_id = c.id
        WHERE ${isNumeric ? "q.id = $1" : "q.public_id::text = $1"}`,
@@ -458,6 +517,8 @@ quotationsRouter.post("/:id/lines", requireRole(ROLES.ADMIN, ROLES.SALES_REP, RO
     }
 
     const quote = quoteResult.rows[0];
+    assertQuotationNotConfirmed(quote.status);
+    await handleCommercialMutationOnApproved(quote.id, quote.status, userId, "Line added");
 
     // Fetch product details & base cost
     const productResult = await query(
@@ -556,9 +617,13 @@ quotationsRouter.patch("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SALE
     const userId = (req as any).user.userId;
     const fields = patchLineSchema.parse(req.body);
 
+    const { quote } = await fetchQuoteContext(id);
+    assertQuotationNotConfirmed(quote.status);
+    await handleCommercialMutationOnApproved(quote.id, quote.status, userId, "Line updated");
+
     const lineCheck = await query(
       `SELECT id FROM quotation_lines WHERE id = $1 AND quotation_id = $2`,
-      [lineId, id]
+      [lineId, quote.id]
     );
 
     if (lineCheck.rows.length === 0) {
@@ -586,11 +651,11 @@ quotationsRouter.patch("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SALE
       reason: "Line updated",
     });
 
-    const refreshed = await recalculateAndPersistQuotation(id);
+    const refreshed = await recalculateAndPersistQuotation(quote.id);
     if (refreshed.header.status === "PENDING_APPROVAL") {
-      await reopenApprovalAfterEdit(id, userId, refreshed);
+      await reopenApprovalAfterEdit(quote.id, userId, refreshed);
     }
-    const fullPayload = await getFullQuotationPayload(id);
+    const fullPayload = await getFullQuotationPayload(quote.id);
     res.json({ data: fullPayload });
   } catch (err) {
     next(err);
@@ -603,9 +668,13 @@ quotationsRouter.delete("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SAL
     const { id, lineId } = req.params;
     const userId = (req as any).user.userId;
 
+    const { quote } = await fetchQuoteContext(id);
+    assertQuotationNotConfirmed(quote.status);
+    await handleCommercialMutationOnApproved(quote.id, quote.status, userId, "Line deleted");
+
     const result = await query(
       `DELETE FROM quotation_lines WHERE id = $1 AND quotation_id = $2 RETURNING id`,
-      [lineId, id]
+      [lineId, quote.id]
     );
 
     if (result.rows.length === 0) {
@@ -622,11 +691,11 @@ quotationsRouter.delete("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SAL
       reason: "Line removed",
     });
 
-    const refreshed = await recalculateAndPersistQuotation(id);
+    const refreshed = await recalculateAndPersistQuotation(quote.id);
     if (refreshed.header.status === "PENDING_APPROVAL") {
-      await reopenApprovalAfterEdit(id, userId, refreshed);
+      await reopenApprovalAfterEdit(quote.id, userId, refreshed);
     }
-    const fullPayload = await getFullQuotationPayload(id);
+    const fullPayload = await getFullQuotationPayload(quote.id);
     res.json({ data: fullPayload });
   } catch (err) {
     next(err);
@@ -637,8 +706,10 @@ quotationsRouter.delete("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SAL
 quotationsRouter.post("/:id/recalculate", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    await recalculateAndPersistQuotation(id);
-    const fullPayload = await getFullQuotationPayload(id);
+    const { quote } = await fetchQuoteContext(id);
+    assertQuotationNotConfirmed(quote.status);
+    await recalculateAndPersistQuotation(quote.id);
+    const fullPayload = await getFullQuotationPayload(quote.id);
     res.json({ data: fullPayload });
   } catch (err) {
     next(err);

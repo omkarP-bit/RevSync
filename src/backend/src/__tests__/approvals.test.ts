@@ -82,11 +82,16 @@ describe("Approvals routes", () => {
       expect(res.status).toBe(401);
     });
 
-    it("restricts access to Admin, Sales Manager, Finance", async () => {
+    it("allows Sales Reps, Managers, Finance, and Admins to view approvals", async () => {
+      vi.mocked(db.query)
+        .mockResolvedValueOnce(oneRow([{ count: "1" }]))
+        .mockResolvedValueOnce(oneRow([requestRow]))
+        .mockResolvedValueOnce(oneRow([stepRow]));
+
       const res = await request(app)
         .get("/api/v1/approvals")
         .set("Authorization", `Bearer ${repToken}`);
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(200);
     });
 
     it("returns paginated approval requests newest-first queue", async () => {

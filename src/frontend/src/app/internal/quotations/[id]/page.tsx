@@ -139,6 +139,13 @@ interface ApprovalRequest {
   steps: ApprovalStep[];
 }
 
+interface AuthUser {
+  id: number;
+  email: string;
+  role_id: number;
+  role_name: string;
+}
+
 export default function QuotationDetailBuilderPage() {
   const params = useParams();
   const router = useRouter();
@@ -148,6 +155,7 @@ export default function QuotationDetailBuilderPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
 
   // Toast Notification State
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
@@ -178,6 +186,17 @@ export default function QuotationDetailBuilderPage() {
   const [recommendations, setRecommendations] = useState<ProductRelationship[]>([]);
   const [dismissedRecIds, setDismissedRecIds] = useState<number[]>([]);
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequest | null>(null);
+
+  useEffect(() => {
+    try {
+      const uStr = localStorage.getItem("user");
+      if (uStr) {
+        setCurrentUser(JSON.parse(uStr));
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const fetchQuote = async () => {
     setLoading(true);
@@ -273,11 +292,9 @@ export default function QuotationDetailBuilderPage() {
         if (res.data) allRels.push(...res.data);
       });
 
-      // Filter out products already present in quote lines
       const existingProductIds = new Set(lines.map((l) => l.product_id));
       const filtered = allRels.filter((r) => !existingProductIds.has(r.related_product_id));
 
-      // Unique by related_product_id
       const uniqueMap = new Map<number, ProductRelationship>();
       filtered.forEach((r) => {
         if (!uniqueMap.has(r.related_product_id)) uniqueMap.set(r.related_product_id, r);
@@ -311,7 +328,15 @@ export default function QuotationDetailBuilderPage() {
     }
   }, [quoteId]);
 
+  const isLocked = quote?.status === "CONFIRMED";
+  const activePendingStep = approvalRequest?.steps?.find((s) => s.status === "PENDING");
+  const isAuthorizedApprover =
+    currentUser &&
+    activePendingStep &&
+    (currentUser.role_id === activePendingStep.role_id || currentUser.role_id === 5);
+
   const handleCustomerChange = async (newCustomerId: number) => {
+    if (isLocked) return;
     try {
       const res = await api.patch<ApiResponse<QuotationDetail>>(`/api/v1/quotations/${quoteId}`, {
         customer_id: newCustomerId,
@@ -325,6 +350,7 @@ export default function QuotationDetailBuilderPage() {
   };
 
   const handleTaxRateChange = async (newTaxRate: number) => {
+    if (isLocked) return;
     try {
       const res = await api.patch<ApiResponse<QuotationDetail>>(`/api/v1/quotations/${quoteId}`, {
         tax_rate_pct: newTaxRate,
@@ -337,6 +363,7 @@ export default function QuotationDetailBuilderPage() {
   };
 
   const handleOrderDiscountChange = async (newOrderDiscount: number) => {
+    if (isLocked) return;
     try {
       const res = await api.patch<ApiResponse<QuotationDetail>>(`/api/v1/quotations/${quoteId}`, {
         order_discount_pct: newOrderDiscount,
@@ -350,6 +377,7 @@ export default function QuotationDetailBuilderPage() {
   };
 
   const handleNotesChange = async (newNotes: string) => {
+    if (isLocked) return;
     try {
       const res = await api.patch<ApiResponse<QuotationDetail>>(`/api/v1/quotations/${quoteId}`, {
         notes: newNotes,
@@ -367,6 +395,7 @@ export default function QuotationDetailBuilderPage() {
     qty: number = 1,
     disc: number = 0
   ) => {
+    if (isLocked) return;
     try {
       const res = await api.post<ApiResponse<QuotationDetail>>(`/api/v1/quotations/${quoteId}/lines`, {
         product_id: productId,
@@ -388,9 +417,8 @@ export default function QuotationDetailBuilderPage() {
   };
 
   const handleLineInputChange = (lineId: number, newQty: number, newDisc: number) => {
-    if (!quote) return;
+    if (!quote || isLocked) return;
 
-    // Update local state immediately for fast response
     setQuote({
       ...quote,
       lines: quote.lines.map((l) =>
@@ -413,7 +441,7 @@ export default function QuotationDetailBuilderPage() {
         fetchApprovalDetail(res.data.id);
       } catch (err: any) {
         showToast(err.message || "Failed to update line", "error");
-        fetchQuote(); // revert to server truth on error
+        fetchQuote();
       } finally {
         setUpdatingLineId(null);
       }
@@ -421,6 +449,7 @@ export default function QuotationDetailBuilderPage() {
   };
 
   const handleDeleteLine = async (lineId: number) => {
+    if (isLocked) return;
     if (!confirm("Are you sure you want to remove this line item?")) return;
     try {
       const res = await api.request<ApiResponse<QuotationDetail>>(`/api/v1/quotations/${quoteId}/lines/${lineId}`, {
@@ -459,7 +488,30 @@ export default function QuotationDetailBuilderPage() {
     }
   };
 
+  const handleApprove = async () => {
+    if (!approvalRequest) return;
+    try {
+      await api.post(`/api/v1/approvals/${approvalRequest.id}/approve`, {});
+      showToast("Quotation step approved successfully!", "success");
+      fetchQuote();
+    } catch (err: any) {
+      showToast(err.message || "Failed to approve quotation step", "error");
+    }
+  };
+
+  const handleReject = async () => {
+    if (!approvalRequest) return;
+    try {
+      await api.post(`/api/v1/approvals/${approvalRequest.id}/reject`, {});
+      showToast("Quotation rejected", "info");
+      fetchQuote();
+    } catch (err: any) {
+      showToast(err.message || "Failed to reject quotation", "error");
+    }
+  };
+
   const openAddModalWithDefaults = () => {
+    if (isLocked) return;
     setShowAddModal(true);
     setSearchTerm("");
     setSelectedCategoryId(0);
@@ -489,7 +541,7 @@ export default function QuotationDetailBuilderPage() {
         </div>
       )}
 
-      {/* Top Breadcrumb & Status Bar */}
+      {/* Top Breadcrumb & Quick Status Indicator */}
       <div className="flex items-center justify-between border-b border-slate-200 pb-3">
         <Link href="/internal/quotations" className="text-xs font-semibold text-slate-500 hover:text-slate-800 flex items-center gap-1">
           ← Back to Quotations List
@@ -501,12 +553,58 @@ export default function QuotationDetailBuilderPage() {
           {quote.status === "APPROVED" && (
             <button
               onClick={() => handleStatusChange("CONFIRMED")}
-              className="bg-blue-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-blue-700 transition"
+              className="bg-emerald-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-emerald-700 transition"
             >
               ✓ Confirm Quote
             </button>
           )}
         </div>
+      </div>
+
+      {/* Dynamic Lifecycle Guidance Banner */}
+      <div className={`p-4 rounded-xl border text-xs font-semibold flex items-center justify-between shadow-xs ${
+        quote.status === "CONFIRMED"
+          ? "bg-slate-900 text-slate-100 border-slate-800"
+          : quote.status === "APPROVED"
+          ? "bg-emerald-50 text-emerald-900 border-emerald-200"
+          : quote.status === "PENDING_APPROVAL"
+          ? "bg-amber-50 text-amber-900 border-amber-200"
+          : quote.status === "NEGOTIATION"
+          ? "bg-purple-50 text-purple-900 border-purple-200"
+          : quote.status === "REJECTED"
+          ? "bg-rose-50 text-rose-900 border-rose-200"
+          : "bg-blue-50 text-blue-900 border-blue-200"
+      }`}>
+        <div className="flex items-center gap-2.5">
+          <span className="text-base">
+            {quote.status === "CONFIRMED" ? "🔒" : quote.status === "APPROVED" ? "✓" : quote.status === "PENDING_APPROVAL" ? "⏳" : quote.status === "NEGOTIATION" ? "💬" : quote.status === "REJECTED" ? "❌" : "📝"}
+          </span>
+          <div>
+            <div className="font-extrabold text-sm">
+              {quote.status === "CONFIRMED" && "Confirmed — Quotation Locked"}
+              {quote.status === "APPROVED" && "Approved — Ready for Confirmation"}
+              {quote.status === "PENDING_APPROVAL" && "Pending Approval Review"}
+              {quote.status === "NEGOTIATION" && "Negotiation — Re-approval Required"}
+              {quote.status === "REJECTED" && "Rejected — Adjustments Needed"}
+              {quote.status === "DRAFT" && "Draft — Editing Allowed"}
+            </div>
+            <div className="text-xs opacity-90 mt-0.5">
+              {quote.status === "CONFIRMED" && "This quotation has been confirmed. All commercial terms and lines are locked against further modification."}
+              {quote.status === "APPROVED" && "Commercial terms passed all required approvals. Click 'Confirm Quote' to lock and proceed to fulfillment."}
+              {quote.status === "PENDING_APPROVAL" && (
+                isAuthorizedApprover
+                  ? `Action Required: You are an authorized approver for Step ${activePendingStep.sequence} (${activePendingStep.role_name || `Role #${activePendingStep.role_id}`}).`
+                  : `Currently undergoing approval review by ${activePendingStep?.role_name || (activePendingStep ? `Role #${activePendingStep.role_id}` : "Management")}.`
+              )}
+              {quote.status === "NEGOTIATION" && "Commercial terms were modified after approval. Submit changes to start a new approval review cycle."}
+              {quote.status === "REJECTED" && "Commercial terms were rejected by management. Edit quantities or discounts and submit for approval again."}
+              {quote.status === "DRAFT" && "Add line items, select customer tier, and configure discounts before submitting for approval."}
+            </div>
+          </div>
+        </div>
+        <span className="font-bold uppercase tracking-wider font-mono text-[10px] px-2.5 py-1 rounded bg-white/40 border border-current shrink-0">
+          {quote.status}
+        </span>
       </div>
 
       {/* Screen Title */}
@@ -524,9 +622,10 @@ export default function QuotationDetailBuilderPage() {
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
           <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Select Customer</label>
           <select
+            disabled={isLocked}
             value={quote.customer_id}
             onChange={(e) => handleCustomerChange(Number(e.target.value))}
-            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-extrabold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-slate-50 truncate"
+            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-extrabold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-slate-50 truncate disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {customers.map((c) => (
               <option key={c.id} value={c.id}>
@@ -546,24 +645,26 @@ export default function QuotationDetailBuilderPage() {
             <div>
               <label className="text-[10px] font-bold text-slate-500 uppercase block">Tax Rate (%):</label>
               <input
+                disabled={isLocked}
                 type="number"
                 step="0.1"
                 min="0"
                 value={quote.tax_rate_pct}
                 onChange={(e) => handleTaxRateChange(parseFloat(e.target.value) || 0)}
-                className="w-full border border-slate-300 rounded px-2 py-1 text-xs font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none text-center bg-slate-50 mt-0.5"
+                className="w-full border border-slate-300 rounded px-2 py-1 text-xs font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none text-center bg-slate-50 mt-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
               />
             </div>
             <div>
               <label className="text-[10px] font-bold text-slate-500 uppercase block">Order Disc (%):</label>
               <input
+                disabled={isLocked}
                 type="number"
                 step="0.5"
                 min="0"
                 max="100"
                 value={quote.order_discount_pct || 0}
                 onChange={(e) => handleOrderDiscountChange(parseFloat(e.target.value) || 0)}
-                className="w-full border border-slate-300 rounded px-2 py-1 text-xs font-bold text-amber-700 focus:ring-2 focus:ring-amber-500 focus:outline-none text-center bg-slate-50 mt-0.5"
+                className="w-full border border-slate-300 rounded px-2 py-1 text-xs font-bold text-amber-700 focus:ring-2 focus:ring-amber-500 focus:outline-none text-center bg-slate-50 mt-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
               />
             </div>
           </div>
@@ -573,12 +674,13 @@ export default function QuotationDetailBuilderPage() {
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
           <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Deal Notes / Terms</label>
           <input
+            disabled={isLocked}
             type="text"
             value={quote.notes || ""}
             onChange={(e) => setQuote({ ...quote, notes: e.target.value })}
             onBlur={(e) => handleNotesChange(e.target.value)}
             placeholder="Add deal notes or commercial terms..."
-            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-slate-50"
+            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed"
           />
         </div>
       </div>
@@ -634,12 +736,14 @@ export default function QuotationDetailBuilderPage() {
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
           <h2 className="font-extrabold text-slate-800 text-sm">Product Lines ({quote.lines?.length || 0})</h2>
-          <button
-            onClick={openAddModalWithDefaults}
-            className="bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 text-xs font-semibold shadow-xs"
-          >
-            + Add Product Line
-          </button>
+          {!isLocked && (
+            <button
+              onClick={openAddModalWithDefaults}
+              className="bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 text-xs font-semibold shadow-xs"
+            >
+              + Add Product Line
+            </button>
+          )}
         </div>
 
         <table className="min-w-full divide-y divide-slate-200 text-xs">
@@ -704,10 +808,11 @@ export default function QuotationDetailBuilderPage() {
                       </span>
                     </td>
 
-                    {/* Qty Input (Debounced) */}
+                    {/* Qty Input */}
                     <td className="px-4 py-3 text-center">
                       <div className="relative inline-block">
                         <input
+                          disabled={isLocked}
                           type="number"
                           min="1"
                           value={line.quantity}
@@ -718,7 +823,7 @@ export default function QuotationDetailBuilderPage() {
                               line.applied_discount_pct
                             )
                           }
-                          className="w-16 border border-slate-300 rounded px-2 py-1 text-center font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          className="w-16 border border-slate-300 rounded px-2 py-1 text-center font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
                         />
                         {isUpdating && (
                           <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
@@ -733,9 +838,10 @@ export default function QuotationDetailBuilderPage() {
                       {quote.currency_code} {Number(line.unit_price).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </td>
 
-                    {/* Discount Input (Debounced) */}
+                    {/* Discount Input */}
                     <td className="px-4 py-3 text-center">
                       <input
+                        disabled={isLocked}
                         type="number"
                         min="0"
                         max="100"
@@ -748,7 +854,7 @@ export default function QuotationDetailBuilderPage() {
                             parseFloat(e.target.value) || 0
                           )
                         }
-                        className="w-16 border border-slate-300 rounded px-2 py-1 text-center font-bold text-amber-600 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                        className="w-16 border border-slate-300 rounded px-2 py-1 text-center font-bold text-amber-600 focus:ring-2 focus:ring-amber-500 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
                       />
                     </td>
 
@@ -784,12 +890,16 @@ export default function QuotationDetailBuilderPage() {
 
                     {/* Action */}
                     <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => handleDeleteLine(line.id)}
-                        className="text-rose-600 hover:text-rose-800 font-semibold"
-                      >
-                        Delete
-                      </button>
+                      {!isLocked ? (
+                        <button
+                          onClick={() => handleDeleteLine(line.id)}
+                          className="text-rose-600 hover:text-rose-800 font-semibold"
+                        >
+                          Delete
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-slate-400 font-mono">Locked</span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -814,8 +924,8 @@ export default function QuotationDetailBuilderPage() {
         </div>
       )}
 
-{/* Dynamic Upsell and Cross-Sell Suggestions Section */}
-      {activeRecs.length > 0 && (
+      {/* Dynamic Recommendations Section */}
+      {!isLocked && activeRecs.length > 0 && (
         <div className="space-y-3">
           <h3 className="text-sm font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
             <span>✨ Recommended Additions</span>
@@ -863,7 +973,7 @@ export default function QuotationDetailBuilderPage() {
         </div>
       )}
 
-      {/* Complete Totals Summary Footer */}
+      {/* Complete Totals Summary Footer & Context-Aware Action Bar */}
       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-center justify-between gap-6">
         <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-4 text-xs w-full md:w-auto">
           <div>
@@ -916,25 +1026,76 @@ export default function QuotationDetailBuilderPage() {
           </div>
         </div>
 
-        {/* Action Buttons */}
+        {/* Dynamic Context-Aware Action Buttons */}
         <div className="flex items-center gap-3 shrink-0">
-          <button
-            onClick={() => handleStatusChange("DRAFT")}
-            className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
-          >
-            Save Draft
-          </button>
-          <button
-            onClick={handleSubmitApproval}
-            className="px-5 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition shadow-xs"
-          >
-            Submit for Approval
-          </button>
+          {quote.status === "CONFIRMED" ? (
+            <button disabled className="px-5 py-2.5 bg-slate-800 text-slate-300 rounded-lg text-xs font-bold shadow-xs cursor-not-allowed flex items-center gap-1.5">
+              <span>🔒</span> Confirmed — Locked
+            </button>
+          ) : quote.status === "APPROVED" ? (
+            <button
+              onClick={() => handleStatusChange("CONFIRMED")}
+              className="px-5 py-2.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition shadow-xs flex items-center gap-1.5"
+            >
+              <span>✓</span> Confirm Quote
+            </button>
+          ) : quote.status === "PENDING_APPROVAL" ? (
+            isAuthorizedApprover ? (
+              <>
+                <button
+                  onClick={handleReject}
+                  className="px-4 py-2.5 bg-rose-600 text-white rounded-lg text-xs font-bold hover:bg-rose-700 transition shadow-xs"
+                >
+                  Reject
+                </button>
+                <button
+                  onClick={handleApprove}
+                  className="px-5 py-2.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition shadow-xs flex items-center gap-1.5"
+                >
+                  <span>✓</span> Approve
+                </button>
+              </>
+            ) : (
+              <button disabled className="px-5 py-2.5 bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-xs font-bold shadow-xs cursor-not-allowed flex items-center gap-1.5">
+                <span>⏳</span> Waiting for Approval
+              </button>
+            )
+          ) : quote.status === "NEGOTIATION" ? (
+            <>
+              <button
+                onClick={() => handleStatusChange("DRAFT")}
+                className="px-4 py-2.5 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+              >
+                Save Draft
+              </button>
+              <button
+                onClick={handleSubmitApproval}
+                className="px-5 py-2.5 bg-purple-600 text-white rounded-lg text-xs font-bold hover:bg-purple-700 transition shadow-xs"
+              >
+                Submit Changes for Approval
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => handleStatusChange("DRAFT")}
+                className="px-4 py-2.5 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+              >
+                Save Draft
+              </button>
+              <button
+                onClick={handleSubmitApproval}
+                className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition shadow-xs"
+              >
+                Submit for Approval
+              </button>
+            </>
+          )}
         </div>
       </div>
 
       {/* Add Line Modal */}
-      {showAddModal && (
+      {!isLocked && showAddModal && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl p-6 max-w-lg w-full shadow-2xl border border-slate-100 space-y-4">
             <h2 className="text-lg font-extrabold text-slate-900">Add Product Line</h2>
@@ -1007,7 +1168,7 @@ export default function QuotationDetailBuilderPage() {
                 </select>
               </div>
 
-              {/* Variant Selector (if product has variants) */}
+              {/* Variant Selector */}
               {loadingVariants ? (
                 <div className="text-xs text-slate-400 italic">Checking for product variants...</div>
               ) : productVariants.length > 0 ? (
