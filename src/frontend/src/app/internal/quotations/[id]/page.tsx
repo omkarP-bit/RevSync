@@ -23,6 +23,25 @@ interface QuotationLine {
   line_margin: number;
 }
 
+interface DiscountAnalysisLine {
+  id: number | null;
+  product_id: number;
+  product_name: string | null;
+  category_id: number;
+  applied_discount_pct: number;
+  allowed_discount_pct: number;
+  line_overage: number;
+  is_flagged: boolean;
+  reason: string | null;
+}
+
+interface DiscountAnalysis {
+  lines: DiscountAnalysisLine[];
+  total_allowed_discount_amount: number;
+  total_applied_discount_amount: number;
+  total_overage: number;
+}
+
 interface QuotationDetail {
   id: number;
   quotation_number: string;
@@ -43,7 +62,10 @@ interface QuotationDetail {
   total_cost: number;
   margin_amount: number;
   margin_pct: number;
+  risk_level: string;
+  total_overage: number;
   notes?: string;
+  discount_analysis?: DiscountAnalysis;
   lines: QuotationLine[];
 }
 
@@ -150,6 +172,37 @@ export default function QuotationEditorPage() {
     }
   };
 
+  const handleSubmit = async () => {
+    try {
+      const res = await api.post<ApiResponse<QuotationDetail>>(`/api/v1/quotations/${quoteId}/submit`, {});
+      setQuote(res.data);
+    } catch (err: any) {
+      alert(err.message || "Failed to submit for approval");
+    }
+  };
+
+  const handleConfirm = async () => {
+    try {
+      const res = await api.patch<ApiResponse<QuotationDetail>>(`/api/v1/quotations/${quoteId}`, {
+        status: "CONFIRMED",
+      });
+      setQuote(res.data);
+    } catch (err: any) {
+      alert(err.message || "Failed to confirm quotation");
+    }
+  };
+
+  const statusBadgeColor = (status: string) =>
+    status === "APPROVED"
+      ? "bg-green-100 text-green-800"
+      : status === "PENDING_APPROVAL"
+      ? "bg-yellow-100 text-yellow-800"
+      : status === "REJECTED"
+      ? "bg-red-100 text-red-800"
+      : status === "CONFIRMED"
+      ? "bg-blue-100 text-blue-800"
+      : "bg-gray-100 text-gray-700";
+
   if (loading) return <div className="p-6 text-gray-500">Loading quotation editor...</div>;
   if (error || !quote) return <div className="p-6 text-red-600">{error || "Quotation not found"}</div>;
 
@@ -165,18 +218,33 @@ export default function QuotationEditorPage() {
           <span className="font-mono text-xs font-bold text-blue-700">{quote.quotation_number}</span>
         </div>
         <div className="flex items-center gap-2">
-          <label className="text-xs font-medium text-gray-500">Status:</label>
-          <select
-            value={quote.status}
-            onChange={(e) => handleStatusChange(e.target.value)}
-            className="border border-gray-300 rounded px-3 py-1.5 text-xs font-bold bg-white text-gray-800"
-          >
-            <option value="DRAFT">DRAFT</option>
-            <option value="PENDING_APPROVAL">PENDING_APPROVAL</option>
-            <option value="APPROVED">APPROVED</option>
-            <option value="CONFIRMED">CONFIRMED</option>
-            <option value="CANCELLED">CANCELLED</option>
-          </select>
+          <span className={`px-2 py-1 text-xs font-bold rounded ${statusBadgeColor(quote.status)}`}>
+            {quote.status}
+          </span>
+          {quote.status === "DRAFT" || quote.status === "NEGOTIATION" ? (
+            <button
+              onClick={handleSubmit}
+              className="bg-blue-600 text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-blue-700"
+            >
+              Submit for Approval
+            </button>
+          ) : null}
+          {quote.status === "PENDING_APPROVAL" ? (
+            <button
+              onClick={() => handleStatusChange("NEGOTIATION")}
+              className="border border-gray-300 px-3 py-1.5 rounded text-xs font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Revoke Submission
+            </button>
+          ) : null}
+          {quote.status === "APPROVED" ? (
+            <button
+              onClick={handleConfirm}
+              className="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-green-700"
+            >
+              Confirm Quotation
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -198,7 +266,7 @@ export default function QuotationEditorPage() {
         </div>
 
         {/* Live Calculation Metric Header */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 pt-4 border-t border-gray-100 text-xs">
+        <div className="grid grid-cols-2 md:grid-cols-7 gap-4 pt-4 border-t border-gray-100 text-xs">
           <div className="bg-gray-50 p-3 rounded">
             <span className="text-gray-500 block">Subtotal</span>
             <span className="text-sm font-bold text-gray-900">{quote.currency_code} {Number(quote.subtotal).toFixed(2)}</span>
@@ -219,7 +287,41 @@ export default function QuotationEditorPage() {
             <span className="text-green-700 font-semibold block">Margin ({Number(quote.margin_pct).toFixed(1)}%)</span>
             <span className="text-base font-extrabold text-green-900">+{quote.currency_code} {Number(quote.margin_amount).toFixed(2)}</span>
           </div>
+          <div className="bg-red-50 p-3 rounded border border-red-200">
+            <span className="text-red-700 font-semibold block">Discount Overage</span>
+            <span className="text-base font-extrabold text-red-900">{Number(quote.total_overage).toFixed(1)} pts</span>
+          </div>
+          <div className={`p-3 rounded border ${
+            quote.risk_level === "HIGH"
+              ? "bg-red-50 border-red-200"
+              : quote.risk_level === "MEDIUM"
+              ? "bg-yellow-50 border-yellow-200"
+              : "bg-green-50 border-green-200"
+          }`}>
+            <span className="text-gray-600 font-semibold block">Risk Level</span>
+            <span className={`text-base font-extrabold ${
+              quote.risk_level === "HIGH" ? "text-red-900" : quote.risk_level === "MEDIUM" ? "text-yellow-800" : "text-green-900"
+            }`}>
+              {quote.risk_level}
+            </span>
+          </div>
         </div>
+
+        {/* Discount policy flags */}
+        {quote.discount_analysis && quote.discount_analysis.lines.some((l) => l.is_flagged) && (
+          <div className="bg-amber-50 border border-amber-200 rounded-md p-4 space-y-2">
+            <p className="text-xs font-bold text-amber-800 uppercase tracking-wide">Discount Policy Flags</p>
+            {quote.discount_analysis.lines
+              .filter((l) => l.is_flagged)
+              .map((l) => (
+                <div key={l.id ?? l.product_id} className="text-xs text-amber-900">
+                  <span className="font-semibold">{l.product_name || `Product #${l.product_id}`}</span>
+                  <span className="text-amber-700"> — applied {Number(l.applied_discount_pct)}% vs allowed {Number(l.allowed_discount_pct)}%</span>
+                  {l.reason ? <span className="block mt-0.5 text-amber-700">{l.reason}</span> : null}
+                </div>
+              ))}
+          </div>
+        )}
       </div>
 
       {/* Live Line Item Editor Table */}
@@ -233,6 +335,7 @@ export default function QuotationEditorPage() {
               <th className="px-4 py-3 text-center w-28">Quantity</th>
               <th className="px-4 py-3 text-right">Unit Price</th>
               <th className="px-4 py-3 text-center w-28">Discount (%)</th>
+              <th className="px-4 py-3 text-center w-28">Allowed</th>
               <th className="px-4 py-3 text-right">Line Total</th>
               <th className="px-4 py-3 text-right">Line Margin</th>
               <th className="px-4 py-3 text-right">Action</th>
@@ -241,13 +344,16 @@ export default function QuotationEditorPage() {
           <tbody className="divide-y divide-gray-200 bg-white">
             {quote.lines.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-gray-400">
+                <td colSpan={8} className="px-4 py-8 text-center text-gray-400">
                   No line items added yet. Click &quot;+ Add Product Line&quot; above to add products to this quote.
                 </td>
               </tr>
             ) : (
-              quote.lines.map((line) => (
-                <tr key={line.id} className="hover:bg-gray-50">
+              quote.lines.map((line) => {
+                const policy = quote.discount_analysis?.lines.find((l) => l.id === line.id);
+                const flagged = policy?.is_flagged ?? false;
+                return (
+                <tr key={line.id} className={flagged ? "bg-amber-50" : "hover:bg-gray-50"}>
                   <td className="px-4 py-3">
                     <div className="font-bold text-gray-900">{line.product_name}</div>
                     <div className="font-mono text-gray-500 text-[10px]">{line.product_sku}</div>
@@ -287,6 +393,20 @@ export default function QuotationEditorPage() {
                       className="w-16 border rounded px-2 py-1 text-center font-bold text-red-600"
                     />
                   </td>
+                  <td className="px-4 py-3 text-center">
+                    {flagged ? (
+                      <span
+                        className="inline-block bg-red-100 text-red-700 text-[10px] font-bold px-2 py-1 rounded cursor-help"
+                        title={policy?.reason ?? ""}
+                      >
+                        {Number(policy?.allowed_discount_pct ?? 0)}%
+                      </span>
+                    ) : (
+                      <span className="text-gray-400 text-[10px] font-semibold">
+                        {Number(policy?.allowed_discount_pct ?? 0)}%
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-right font-bold text-gray-900">
                     {quote.currency_code} {Number(line.line_total).toFixed(2)}
                   </td>
@@ -302,7 +422,8 @@ export default function QuotationEditorPage() {
                     </button>
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>

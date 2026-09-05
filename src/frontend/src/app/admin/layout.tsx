@@ -10,6 +10,8 @@ const adminLinks = [
   { label: "Customers", href: "/admin/customers" },
   { label: "Categories", href: "/admin/categories" },
   { label: "Currencies", href: "/admin/currencies" },
+  { label: "Discount Rules", href: "/admin/discount-rules" },
+  { label: "Approval Rules", href: "/admin/approval-rules" },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {

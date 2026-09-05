@@ -22,6 +22,8 @@ function repToken() {
   return jwt.sign({ userId: 3, roleId: 1, email: "rep@test.com" }, JWT_SECRET, { expiresIn: "1h" });
 }
 
+const qr = (rows: any[]) => ({ rows, rowCount: rows.length, command: "", oid: 0, fields: [] });
+
 const mockQuote = {
   id: 1,
   quotation_number: "QT-2026-0001",
@@ -55,6 +57,7 @@ const mockLine = {
   product_id: 5,
   product_name: "Software License",
   product_sku: "SW-001",
+  category_id: 1,
   product_variant_id: null,
   variant_name: null,
   description: "Standard pack",
@@ -71,6 +74,22 @@ const mockLine = {
   updated_at: new Date().toISOString(),
 };
 
+// Row shapes returned by fetchQuoteContext (quotations x customers join).
+const ctxRow = (overrides: Partial<typeof mockQuote> = {}) => ({
+  id: 1,
+  customer_id: 1,
+  currency_code: "USD",
+  tax_rate_pct: "10.00",
+  status: "DRAFT",
+  customer_tier_id: 1,
+  ...overrides,
+});
+
+// Phase 4 rule seeds aligned with the smoke-test plan.
+const discountRule = { id: 1, customer_tier_id: 1, category_id: 1, max_discount_pct: "10.00", is_active: true };
+const mediumRule = { id: 1, risk_level: "MEDIUM", min_total_overage: "5.00", role_sequence: [2], is_active: true };
+const highRule = { id: 2, risk_level: "HIGH", min_total_overage: "8.00", role_sequence: [2, 3], is_active: true };
+
 describe("Quotations routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -84,8 +103,8 @@ describe("Quotations routes", () => {
 
     it("should return paginated quotations for Sales Rep", async () => {
       vi.mocked(db.query)
-        .mockResolvedValueOnce({ rows: [{ count: "1" }], rowCount: 1, command: "", oid: 0, fields: [] })
-        .mockResolvedValueOnce({ rows: [mockQuote], rowCount: 1, command: "", oid: 0, fields: [] });
+        .mockResolvedValueOnce(qr([{ count: "1" }]))
+        .mockResolvedValueOnce(qr([mockQuote]));
 
       const res = await request(app)
         .get("/api/v1/quotations")
@@ -100,9 +119,9 @@ describe("Quotations routes", () => {
   describe("POST /api/v1/quotations", () => {
     it("should create a new quote and generate quotation_number", async () => {
       vi.mocked(db.query)
-        .mockResolvedValueOnce({ rows: [{ id: 1, currency_code: "USD" }], rowCount: 1, command: "", oid: 0, fields: [] })
-        .mockResolvedValueOnce({ rows: [{ count: "0" }], rowCount: 1, command: "", oid: 0, fields: [] })
-        .mockResolvedValueOnce({ rows: [mockQuote], rowCount: 1, command: "", oid: 0, fields: [] });
+        .mockResolvedValueOnce(qr([{ id: 1, currency_code: "USD" }]))
+        .mockResolvedValueOnce(qr([{ count: "0" }]))
+        .mockResolvedValueOnce(qr([mockQuote]));
 
       const res = await request(app)
         .post("/api/v1/quotations")
@@ -119,10 +138,11 @@ describe("Quotations routes", () => {
   });
 
   describe("GET /api/v1/quotations/:id", () => {
-    it("should return detailed quote with lines", async () => {
+    it("should return detailed quote with lines and discount analysis", async () => {
       vi.mocked(db.query)
-        .mockResolvedValueOnce({ rows: [mockQuote], rowCount: 1, command: "", oid: 0, fields: [] })
-        .mockResolvedValueOnce({ rows: [mockLine], rowCount: 1, command: "", oid: 0, fields: [] });
+        .mockResolvedValueOnce(qr([mockQuote]))
+        .mockResolvedValueOnce(qr([{ ...mockLine, applied_discount_pct: "15.00" }]))
+        .mockResolvedValueOnce(qr([discountRule]));
 
       const res = await request(app)
         .get("/api/v1/quotations/1")
@@ -131,6 +151,154 @@ describe("Quotations routes", () => {
       expect(res.status).toBe(200);
       expect(res.body.data.lines).toHaveLength(1);
       expect(res.body.data.lines[0].line_margin).toBe(300);
+      // Bronze (tier 1) x Software (cat 1) allows 10%; 15% applied -> 5 pts overage.
+      expect(res.body.data.discount_analysis.lines[0].is_flagged).toBe(true);
+      expect(res.body.data.discount_analysis.lines[0].line_overage).toBe(5);
+      expect(res.body.data.discount_analysis.lines[0].reason).toContain("15%");
+    });
+  });
+
+  describe("POST /api/v1/quotations/:id/submit", () => {
+    it("approves a LOW risk quotation without creating an approval request", async () => {
+      vi.mocked(db.query)
+        .mockResolvedValueOnce(qr([ctxRow()])) // fetchQuoteContext
+        .mockResolvedValueOnce(qr([{ ...mockLine, applied_discount_pct: "0.00" }])) // lines w/ discount 0
+        .mockResolvedValueOnce(qr([])) // discount rules
+        .mockResolvedValueOnce(qr([])) // approval rules
+        .mockResolvedValueOnce(qr([])) // line update
+        .mockResolvedValueOnce(qr([{ ...mockQuote, risk_level: "LOW", total_overage: "0.0000" }])) // header update
+        .mockResolvedValueOnce(qr([])) // status -> APPROVED
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit
+        .mockResolvedValueOnce(qr([{ ...mockQuote, status: "APPROVED" }])); // final select
+
+      const res = await request(app)
+        .post("/api/v1/quotations/1/submit")
+        .set("Authorization", `Bearer ${repToken()}`)
+        .send({ notes: "Straightforward deal" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe("APPROVED");
+      expect(db.query).toHaveBeenCalledTimes(9);
+    });
+
+    it("routes a HIGH overage into a two-step approval request", async () => {
+      vi.mocked(db.query)
+        .mockResolvedValueOnce(qr([ctxRow()])) // fetchQuoteContext
+        .mockResolvedValueOnce(qr([{ ...mockLine, applied_discount_pct: "18.00" }])) // 18% applied
+        .mockResolvedValueOnce(qr([discountRule])) // 10% max for tier 1 x cat 1 -> overage 8
+        .mockResolvedValueOnce(qr([mediumRule, highRule]))
+        .mockResolvedValueOnce(qr([])) // line update
+        .mockResolvedValueOnce(qr([{ ...mockQuote, risk_level: "HIGH", total_overage: "8.0000" }])) // header update
+        .mockResolvedValueOnce(qr([{ id: 5, quotation_id: 1, status: "PENDING_APPROVAL", risk_level: "HIGH" }])) // insert request
+        .mockResolvedValueOnce(qr([])) // step 1 (Sales Manager)
+        .mockResolvedValueOnce(qr([])) // step 2 (Finance)
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit
+        .mockResolvedValueOnce(qr([])) // status -> PENDING_APPROVAL
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit
+        .mockResolvedValueOnce(qr([{ ...mockQuote, status: "PENDING_APPROVAL", risk_level: "HIGH", total_overage: "8.0000" }])); // final select
+
+      const res = await request(app)
+        .post("/api/v1/quotations/1/submit")
+        .set("Authorization", `Bearer ${repToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe("PENDING_APPROVAL");
+      expect(res.body.data.risk_level).toBe("HIGH");
+      expect(res.body.data.total_overage).toBe(8);
+    });
+
+    it("rejects submission for a quotation that is not DRAFT/NEGOTIATION", async () => {
+      vi.mocked(db.query)
+        .mockResolvedValueOnce(qr([ctxRow({ status: "APPROVED" })]))
+        .mockResolvedValueOnce(qr([mockLine]))
+        .mockResolvedValueOnce(qr([]))
+        .mockResolvedValueOnce(qr([]))
+        .mockResolvedValueOnce(qr([])) // line update
+        .mockResolvedValueOnce(qr([{ ...mockQuote, status: "APPROVED" }])); // header update (reflects DB status)
+
+      const res = await request(app)
+        .post("/api/v1/quotations/1/submit")
+        .set("Authorization", `Bearer ${repToken()}`);
+
+      expect(res.status).toBe(422);
+    });
+  });
+
+  describe("PATCH /api/v1/quotations/:id status guards", () => {
+    it("blocks setting APPROVED directly via the workflow-state gate", async () => {
+      vi.mocked(db.query).mockResolvedValueOnce(qr([ctxRow()]));
+
+      const res = await request(app)
+        .patch("/api/v1/quotations/1")
+        .set("Authorization", `Bearer ${repToken()}`)
+        .send({ status: "APPROVED" });
+
+      expect(res.status).toBe(422);
+    });
+
+    it("blocks CONFIRMED on a quotation that is not APPROVED", async () => {
+      vi.mocked(db.query).mockResolvedValueOnce(qr([ctxRow({})]));
+
+      const res = await request(app)
+        .patch("/api/v1/quotations/1")
+        .set("Authorization", `Bearer ${repToken()}`)
+        .send({ status: "CONFIRMED" });
+
+      expect(res.status).toBe(422);
+    });
+
+    it("blocks CONFIRMED while an approval is still open", async () => {
+      vi.mocked(db.query)
+        .mockResolvedValueOnce(qr([ctxRow({ status: "APPROVED" })]))
+        .mockResolvedValueOnce(qr([{ id: 5 }]));
+
+      const res = await request(app)
+        .patch("/api/v1/quotations/1")
+        .set("Authorization", `Bearer ${repToken()}`)
+        .send({ status: "CONFIRMED" });
+
+      expect(res.status).toBe(422);
+    });
+  });
+
+  describe("POST /api/v1/quotations/:id/lines on a PENDING_APPROVAL quote", () => {
+    it("cancels the open approval and re-creates it after the edit", async () => {
+      vi.mocked(db.query)
+        .mockResolvedValueOnce(qr([{ id: 1, currency_code: "USD", customer_tier_id: 1 }])) // quote
+        .mockResolvedValueOnce(qr([{ id: 6, name: "Hardware", base_cost: "50.0000" }])) // product
+        .mockResolvedValueOnce(qr([])) // price list
+        .mockResolvedValueOnce(qr([{ id: 11 }])) // insert line
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit LINE_ADDED
+        // ---- recalculateAndPersistQuotation
+        .mockResolvedValueOnce(qr([ctxRow({ status: "PENDING_APPROVAL" })])) // quote context
+        .mockResolvedValueOnce(qr([
+          { id: 10, product_id: 5, category_id: 1, quantity: 10, unit_price: "100.0000", unit_cost: "60.0000", applied_discount_pct: "18.00", line_subtotal: "1000.0000" },
+          { id: 11, product_id: 6, category_id: 1, quantity: 2, unit_price: "65.0000", unit_cost: "50.0000", applied_discount_pct: "0.00", line_subtotal: "130.0000" },
+        ])) // lines
+        .mockResolvedValueOnce(qr([discountRule])) // discount rules
+        .mockResolvedValueOnce(qr([mediumRule, highRule])) // approval rules
+        .mockResolvedValueOnce(qr([])) // line update 10
+        .mockResolvedValueOnce(qr([])) // line update 11
+        .mockResolvedValueOnce(qr([{ ...mockQuote, status: "PENDING_APPROVAL", risk_level: "HIGH", total_overage: "8.0000" }])) // header update
+        // ---- reopenApprovalAfterEdit (still HIGH -> cancel + re-create)
+        .mockResolvedValueOnce(qr([{ id: 5 }])) // open approval
+        .mockResolvedValueOnce(qr([])) // cancel request
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit CANCELLED
+        .mockResolvedValueOnce(qr([{ id: 6, status: "PENDING_APPROVAL", risk_level: "HIGH" }])) // insert new request
+        .mockResolvedValueOnce(qr([])) // step 1
+        .mockResolvedValueOnce(qr([])) // step 2
+        .mockResolvedValueOnce(qr([{ id: 1 }])) // audit CREATED
+        .mockResolvedValueOnce(qr([])) // status -> PENDING_APPROVAL
+        .mockResolvedValueOnce(qr([{ id: 1 }])); // audit REOPENED
+
+      const res = await request(app)
+        .post("/api/v1/quotations/1/lines")
+        .set("Authorization", `Bearer ${repToken()}`)
+        .send({ product_id: 6, quantity: 2, applied_discount_pct: 0 });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.risk_level).toBe("HIGH");
+      expect(db.query).toHaveBeenCalledTimes(21);
     });
   });
 });

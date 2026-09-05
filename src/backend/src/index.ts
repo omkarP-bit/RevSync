@@ -17,6 +17,8 @@ import { currenciesRouter } from "./modules/currencies/currencies.routes.js";
 import { productsRouter } from "./modules/products/products.routes.js";
 import { pricingRouter } from "./modules/pricing/pricing.routes.js";
 import { quotationsRouter } from "./modules/quotations/quotations.routes.js";
+import { discountsRouter } from "./modules/discounts/discounts.routes.js";
+import { approvalsRouter } from "./modules/approvals/approvals.routes.js";
 
 async function main() {
   const config = loadConfig();
@@ -48,6 +50,8 @@ async function main() {
   app.use("/api/v1/products", productsRouter);
   app.use("/api/v1/pricelists", pricingRouter);
   app.use("/api/v1/quotations", quotationsRouter);
+  app.use("/api/v1/discounts", discountsRouter);
+  app.use("/api/v1/approvals", approvalsRouter);
 
   app.use(errorHandler);
 
