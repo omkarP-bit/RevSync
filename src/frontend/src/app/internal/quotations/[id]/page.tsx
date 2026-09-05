@@ -7,6 +7,7 @@ import { api, ApiResponse } from "@/lib/api";
 import { CustomerFormModal, Customer as ModalCustomer } from "@/components/CustomerFormModal";
 import { exportQuotationPdf } from "@/lib/pdf";
 import { useCurrency } from "@/components/CurrencyProvider";
+import { DecisionHistoryDrawer } from "@/components/DecisionHistoryDrawer";
 
 interface QuotationLine {
   id: number;
@@ -197,6 +198,9 @@ export default function QuotationDetailBuilderPage() {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const { format } = useCurrency();
+
+  // Decision History Drawer State
+  const [showDecisionHistory, setShowDecisionHistory] = useState(false);
 
   useEffect(() => {
     try {
@@ -643,13 +647,21 @@ export default function QuotationDetailBuilderPage() {
       </div>
 
       {/* Screen Title */}
-      <div>
-        <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">
-          Quotation Detail: {quote.quotation_number} ({quote.customer_name})
-        </h1>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Configure customer, pricing tier, line items, order discounts, and review governance risk.
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">
+            Quotation Detail: {quote.quotation_number} ({quote.customer_name})
+          </h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Configure customer, pricing tier, line items, order discounts, and review governance risk.
+          </p>
+        </div>
+        <button
+          onClick={() => setShowDecisionHistory(true)}
+          className="px-3.5 py-2 rounded-xl bg-slate-900 text-slate-100 hover:bg-slate-800 border border-slate-700 text-xs font-bold shadow-sm flex items-center gap-2 transition-all hover:scale-[1.02]"
+        >
+          <span>📜</span> View Decision History
+        </button>
       </div>
 
       {/* Customer & Price List Header Grid */}
@@ -1338,6 +1350,13 @@ export default function QuotationDetailBuilderPage() {
           </div>
         </div>
       )}
+
+      {/* Decision History Drawer */}
+      <DecisionHistoryDrawer
+        quotationId={quoteId}
+        isOpen={showDecisionHistory}
+        onClose={() => setShowDecisionHistory(false)}
+      />
     </div>
   );
 }

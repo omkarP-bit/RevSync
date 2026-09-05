@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { api, ApiResponse } from "@/lib/api";
 import { exportNegotiationPdf } from "@/lib/pdf";
 import { useCurrency } from "@/components/CurrencyProvider";
+import { DecisionHistoryDrawer } from "@/components/DecisionHistoryDrawer";
 
 interface NegotiationRequest {
   id: number;
@@ -86,6 +87,7 @@ export default function NegotiationDetailPage() {
   const [chatBody, setChatBody] = useState("");
   const [sending, setSending] = useState(false);
   const { format } = useCurrency();
+  const [showDecisionHistory, setShowDecisionHistory] = useState(false);
 
   const isManager = roleId === 2 || roleId === 5;
 
@@ -183,6 +185,12 @@ export default function NegotiationDetailPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowDecisionHistory(true)}
+            className="px-3 py-1.5 rounded-lg bg-slate-900 text-slate-100 hover:bg-slate-800 border border-slate-700 text-xs font-bold shadow-xs flex items-center gap-1.5"
+          >
+            <span>📜</span> View Decision History
+          </button>
           <button
             onClick={() => exportNegotiationPdf({ ...neg, lines })}
             className="px-3 py-1 text-xs font-semibold border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700"
@@ -403,6 +411,13 @@ export default function NegotiationDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Decision History Drawer */}
+      <DecisionHistoryDrawer
+        quotationId={neg?.quotation_id || null}
+        isOpen={showDecisionHistory}
+        onClose={() => setShowDecisionHistory(false)}
+      />
     </div>
   );
 }

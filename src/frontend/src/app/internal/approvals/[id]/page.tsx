@@ -6,6 +6,7 @@ import Link from "next/link";
 import { api, ApiResponse } from "@/lib/api";
 import { exportApprovalPdf } from "@/lib/pdf";
 import { useCurrency } from "@/components/CurrencyProvider";
+import { DecisionHistoryDrawer } from "@/components/DecisionHistoryDrawer";
 
 interface ApprovalStep {
   id: number;
@@ -61,6 +62,7 @@ export default function ApprovalDetailPage() {
   const [notes, setNotes] = useState("");
   const [acting, setActing] = useState(false);
   const { format } = useCurrency();
+  const [showDecisionHistory, setShowDecisionHistory] = useState(false);
 
   const fetchApproval = async () => {
     setLoading(true);
@@ -233,12 +235,20 @@ export default function ApprovalDetailPage() {
       {/* Decision actions */}
       {canDecide && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 space-y-4">
-          <h2 className="text-lg font-bold text-gray-900">Your Decision</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold text-gray-900">Your Decision</h2>
+            <button
+              onClick={() => setShowDecisionHistory(true)}
+              className="px-3 py-1.5 rounded-lg bg-slate-900 text-slate-100 hover:bg-slate-800 border border-slate-700 text-xs font-bold shadow-xs flex items-center gap-1.5"
+            >
+              <span>📜</span> View Decision History
+            </button>
+          </div>
           <textarea
             rows={2}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="Optional decision notes / comments"
+            placeholder="Decision notes / rationale (explaining why deal was approved, rejected, or returned)"
             className="w-full border rounded px-3 py-2 text-sm"
           />
           <div className="flex justify-end gap-2">
@@ -268,6 +278,13 @@ export default function ApprovalDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Decision History Drawer */}
+      <DecisionHistoryDrawer
+        quotationId={approval?.quotation_id || null}
+        isOpen={showDecisionHistory}
+        onClose={() => setShowDecisionHistory(false)}
+      />
     </div>
   );
 }
