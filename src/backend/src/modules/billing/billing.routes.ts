@@ -1,8 +1,8 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { query, withTransaction } from "../../database/pool.js";
 import { authenticate, requireRole, ROLES } from "../../middleware/auth.js";
+import { authenticateCustomer } from "../../middleware/customerAuth.js";
 import { ConflictError, NotFoundError, UnprocessableEntityError, ValidationError } from "../../shared/errors.js";
-import { writeAuditLog } from "../../shared/audit.js";
 import { calculateQuotation } from "../../engines/quotation-engine.js";
 import { z } from "zod";
 
@@ -13,8 +13,7 @@ export const creditNotesRouter = Router();
 creditNotesRouter.use(authenticate);
 
 export const invoicesPortalRouter = Router();
-invoicesPortalRouter.use(authenticate);
-invoicesPortalRouter.use(async (_req, _res, next) => next());
+invoicesPortalRouter.use(authenticateCustomer);
 
 const PAYMENT_METHODS = ["CASH", "BANK_TRANSFER", "CARD", "CHECK", "OTHER"] as const;
 const INVOICE_STATUSES = ["ISSUED", "PARTIALLY_PAID", "PAID", "CANCELLED"] as const;
@@ -49,15 +48,17 @@ const PAYMENT_TERM_DAYS: Record<string, number> = {
 };
 
 async function generateInvoiceNumber(client?: any): Promise<string> {
-  const countResult = await (client ?? query)(
-    client ? `SELECT COUNT(*) FROM invoices` : `SELECT COUNT(*) FROM invoices`
-  );
+  const countResult = client
+    ? await client.query(`SELECT COUNT(*) FROM invoices`)
+    : await query(`SELECT COUNT(*) FROM invoices`);
   const nextSeq = parseInt(countResult.rows[0].count) + 1;
   return `INV-${new Date().getFullYear()}-${String(nextSeq).padStart(4, "0")}`;
 }
 
 async function generateCreditNoteNumber(client?: any): Promise<string> {
-  const countResult = await (client ?? query)(`SELECT COUNT(*) FROM credit_notes`);
+  const countResult = client
+    ? await client.query(`SELECT COUNT(*) FROM credit_notes`)
+    : await query(`SELECT COUNT(*) FROM credit_notes`);
   const nextSeq = parseInt(countResult.rows[0].count) + 1;
   return `CN-${new Date().getFullYear()}-${String(nextSeq).padStart(4, "0")}`;
 }
