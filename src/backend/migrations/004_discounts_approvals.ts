@@ -61,7 +61,7 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
     notes: { type: "TEXT" },
   });
   pgm.createIndex("approval_requests", ["quotation_id"], { name: "idx_approval_requests_quotation_id" });
-  pgm.createIndex("approval_requests", ["status", "created_at"], {
+  pgm.createIndex("approval_requests", ["status", "submitted_at"], {
     name: "idx_approval_requests_status_created",
     where: "status = 'PENDING_APPROVAL'",
   });

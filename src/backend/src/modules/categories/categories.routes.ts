@@ -13,7 +13,7 @@ const categorySchema = z.object({
   parent_id: z.number().int().positive().optional(),
 });
 
-categoriesRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP), async (req: Request, res: Response, next: NextFunction) => {
+categoriesRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE, ROLES.WAREHOUSE_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
@@ -39,7 +39,7 @@ categoriesRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP), async (req:
   }
 });
 
-categoriesRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP), async (req: Request, res: Response, next: NextFunction) => {
+categoriesRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE, ROLES.WAREHOUSE_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await query("SELECT * FROM categories WHERE id = $1", [req.params.id]);
     if (result.rows.length === 0) throw new NotFoundError("Category", req.params.id);
@@ -49,7 +49,7 @@ categoriesRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP), async (r
   }
 });
 
-categoriesRouter.post("/", requireRole(ROLES.ADMIN), async (req: Request, res: Response, next: NextFunction) => {
+categoriesRouter.post("/", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = categorySchema.parse(req.body);
     const result = await query(
@@ -62,7 +62,7 @@ categoriesRouter.post("/", requireRole(ROLES.ADMIN), async (req: Request, res: R
   }
 });
 
-categoriesRouter.patch("/:id", requireRole(ROLES.ADMIN), async (req: Request, res: Response, next: NextFunction) => {
+categoriesRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const fields = categorySchema.partial().parse(req.body);
     const entries = Object.entries(fields).filter(([, v]) => v !== undefined);

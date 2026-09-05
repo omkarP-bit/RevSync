@@ -13,28 +13,28 @@ export const quotationsRouter = Router();
 quotationsRouter.use(authenticate);
 
 const createQuotationSchema = z.object({
-  customer_id: z.number().int().positive(),
-  tax_rate_pct: z.number().nonnegative().default(10.0),
+  customer_id: z.coerce.number().int().positive(),
+  tax_rate_pct: z.coerce.number().nonnegative().default(10.0),
   notes: z.string().optional(),
 });
 
 const patchQuotationSchema = z.object({
   status: z.enum(["DRAFT", "PENDING_APPROVAL", "APPROVED", "REJECTED", "NEGOTIATION", "CONFIRMED", "CANCELLED"]).optional(),
-  tax_rate_pct: z.number().nonnegative().optional(),
+  tax_rate_pct: z.coerce.number().nonnegative().optional(),
   notes: z.string().optional(),
 });
 
 const addLineSchema = z.object({
-  product_id: z.number().int().positive(),
-  product_variant_id: z.number().int().positive().nullable().optional(),
+  product_id: z.coerce.number().int().positive(),
+  product_variant_id: z.coerce.number().int().positive().nullable().optional(),
   description: z.string().optional(),
-  quantity: z.number().int().positive().default(1),
-  applied_discount_pct: z.number().min(0).max(100).default(0),
+  quantity: z.coerce.number().int().positive().default(1),
+  applied_discount_pct: z.coerce.number().min(0).max(100).default(0),
 });
 
 const patchLineSchema = z.object({
-  quantity: z.number().int().positive().optional(),
-  applied_discount_pct: z.number().min(0).max(100).optional(),
+  quantity: z.coerce.number().int().positive().optional(),
+  applied_discount_pct: z.coerce.number().min(0).max(100).optional(),
   description: z.string().optional(),
 });
 
@@ -392,102 +392,105 @@ quotationsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_
   }
 });
 
+async function getFullQuotationPayload(quotationId: string | number) {
+  const isNumeric = typeof quotationId === "number" || /^\d+$/.test(String(quotationId));
+
+  const quoteResult = await query(
+    `SELECT q.id, q.quotation_number, q.public_id, q.customer_id, c.name as customer_name,
+            c.tier_id as customer_tier_id, ct.name as tier_name,
+            q.sales_rep_id, u.first_name || ' ' || u.last_name as sales_rep_name,
+            q.currency_code, q.status, q.subtotal, q.discount_total, q.tax_rate_pct,
+            q.tax_total, q.grand_total, q.total_cost, q.margin_amount, q.margin_pct,
+            q.total_overage, q.risk_level, q.notes, q.created_at, q.updated_at
+     FROM quotations q
+     JOIN customers c ON q.customer_id = c.id
+     JOIN customer_tiers ct ON c.tier_id = ct.id
+     JOIN users u ON q.sales_rep_id = u.id
+     WHERE ${isNumeric ? "q.id = $1" : "q.public_id::text = $1"}`,
+    [quotationId]
+  );
+
+  if (quoteResult.rows.length === 0) {
+    throw new NotFoundError("Quotation", quotationId);
+  }
+
+  const quote = quoteResult.rows[0];
+
+  const linesResult = await query(
+    `SELECT ql.id, ql.quotation_id, ql.product_id, p.name as product_name, p.sku as product_sku,
+            p.category_id, ql.product_variant_id, pv.name as variant_name, ql.description, ql.quantity,
+            ql.unit_price, ql.unit_cost, ql.applied_discount_pct, ql.discount_amount,
+            ql.line_subtotal, ql.line_total, ql.line_cost, ql.line_margin,
+            ql.created_at, ql.updated_at
+     FROM quotation_lines ql
+     JOIN products p ON ql.product_id = p.id
+     LEFT JOIN product_variants pv ON ql.product_variant_id = pv.id
+     WHERE ql.quotation_id = $1
+     ORDER BY ql.id ASC`,
+    [quote.id]
+  );
+
+  const discountRules = await fetchDiscountRules(quote.customer_tier_id);
+  const discountEvaluation = evaluateDiscounts(
+    Number(quote.customer_tier_id),
+    discountRules.map((r) => ({
+      id: Number(r.id),
+      customer_tier_id: Number(r.customer_tier_id),
+      category_id: Number(r.category_id),
+      max_discount_pct: Number(r.max_discount_pct),
+      is_active: Boolean(r.is_active),
+    })),
+    linesResult.rows.map((l) => ({
+      id: Number(l.id),
+      product_id: Number(l.product_id),
+      category_id: Number(l.category_id),
+      line_subtotal: Number(l.line_subtotal),
+      applied_discount_pct: Number(l.applied_discount_pct),
+    }))
+  );
+
+  return {
+    ...serializeHeader(quote),
+    discount_analysis: {
+      ...discountEvaluation,
+      lines: discountEvaluation.lines.map((l) => ({
+        id: l.id ?? null,
+        product_id: l.product_id,
+        product_name: linesResult.rows.find((r) => Number(r.id) === Number(l.id))?.product_name ?? null,
+        category_id: l.category_id,
+        applied_discount_pct: l.applied_discount_pct,
+        allowed_discount_pct: l.allowed_discount_pct,
+        line_overage: l.line_overage,
+        is_flagged: l.is_flagged,
+        reason: l.reason,
+      })),
+    },
+    lines: linesResult.rows.map((l) => ({
+      ...l,
+      id: Number(l.id),
+      quotation_id: Number(l.quotation_id),
+      product_id: Number(l.product_id),
+      category_id: Number(l.category_id),
+      product_variant_id: l.product_variant_id ? Number(l.product_variant_id) : null,
+      quantity: Number(l.quantity),
+      unit_price: Number(l.unit_price),
+      unit_cost: Number(l.unit_cost),
+      applied_discount_pct: Number(l.applied_discount_pct),
+      discount_amount: Number(l.discount_amount),
+      line_subtotal: Number(l.line_subtotal),
+      line_total: Number(l.line_total),
+      line_cost: Number(l.line_cost),
+      line_margin: Number(l.line_margin),
+    })),
+  };
+}
+
 // GET /api/v1/quotations/:id
 quotationsRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const isNumeric = /^\d+$/.test(id);
-
-    const quoteResult = await query(
-      `SELECT q.id, q.quotation_number, q.public_id, q.customer_id, c.name as customer_name,
-              c.tier_id as customer_tier_id, ct.name as tier_name,
-              q.sales_rep_id, u.first_name || ' ' || u.last_name as sales_rep_name,
-              q.currency_code, q.status, q.subtotal, q.discount_total, q.tax_rate_pct,
-              q.tax_total, q.grand_total, q.total_cost, q.margin_amount, q.margin_pct,
-              q.total_overage, q.risk_level, q.notes, q.created_at, q.updated_at
-       FROM quotations q
-       JOIN customers c ON q.customer_id = c.id
-       JOIN customer_tiers ct ON c.tier_id = ct.id
-       JOIN users u ON q.sales_rep_id = u.id
-       WHERE ${isNumeric ? "q.id = $1" : "q.public_id::text = $1"}`,
-      [id]
-    );
-
-    if (quoteResult.rows.length === 0) {
-      throw new NotFoundError("Quotation", id);
-    }
-
-    const quote = quoteResult.rows[0];
-
-    const linesResult = await query(
-      `SELECT ql.id, ql.quotation_id, ql.product_id, p.name as product_name, p.sku as product_sku,
-              p.category_id, ql.product_variant_id, pv.name as variant_name, ql.description, ql.quantity,
-              ql.unit_price, ql.unit_cost, ql.applied_discount_pct, ql.discount_amount,
-              ql.line_subtotal, ql.line_total, ql.line_cost, ql.line_margin,
-              ql.created_at, ql.updated_at
-       FROM quotation_lines ql
-       JOIN products p ON ql.product_id = p.id
-       LEFT JOIN product_variants pv ON ql.product_variant_id = pv.id
-       WHERE ql.quotation_id = $1
-       ORDER BY ql.id ASC`,
-      [quote.id]
-    );
-
-    const discountRules = await fetchDiscountRules(quote.customer_tier_id);
-    const discountEvaluation = evaluateDiscounts(
-      Number(quote.customer_tier_id),
-      discountRules.map((r) => ({
-        id: Number(r.id),
-        customer_tier_id: Number(r.customer_tier_id),
-        category_id: Number(r.category_id),
-        max_discount_pct: Number(r.max_discount_pct),
-        is_active: Boolean(r.is_active),
-      })),
-      linesResult.rows.map((l) => ({
-        id: Number(l.id),
-        product_id: Number(l.product_id),
-        category_id: Number(l.category_id),
-        line_subtotal: Number(l.line_subtotal),
-        applied_discount_pct: Number(l.applied_discount_pct),
-      }))
-    );
-
-    res.json({
-      data: {
-        ...serializeHeader(quote),
-        discount_analysis: {
-          ...discountEvaluation,
-          lines: discountEvaluation.lines.map((l) => ({
-            id: l.id ?? null,
-            product_id: l.product_id,
-            product_name: linesResult.rows.find((r) => Number(r.id) === Number(l.id))?.product_name ?? null,
-            category_id: l.category_id,
-            applied_discount_pct: l.applied_discount_pct,
-            allowed_discount_pct: l.allowed_discount_pct,
-            line_overage: l.line_overage,
-            is_flagged: l.is_flagged,
-            reason: l.reason,
-          })),
-        },
-        lines: linesResult.rows.map((l) => ({
-          ...l,
-          id: Number(l.id),
-          quotation_id: Number(l.quotation_id),
-          product_id: Number(l.product_id),
-          category_id: Number(l.category_id),
-          product_variant_id: l.product_variant_id ? Number(l.product_variant_id) : null,
-          quantity: Number(l.quantity),
-          unit_price: Number(l.unit_price),
-          unit_cost: Number(l.unit_cost),
-          applied_discount_pct: Number(l.applied_discount_pct),
-          discount_amount: Number(l.discount_amount),
-          line_subtotal: Number(l.line_subtotal),
-          line_total: Number(l.line_total),
-          line_cost: Number(l.line_cost),
-          line_margin: Number(l.line_margin),
-        })),
-      },
-    });
+    const data = await getFullQuotationPayload(id);
+    res.json({ data });
   } catch (err) {
     next(err);
   }
@@ -796,7 +799,8 @@ quotationsRouter.post("/:id/lines", requireRole(ROLES.ADMIN, ROLES.SALES_REP, RO
     if (refreshed.header.status === "PENDING_APPROVAL") {
       await reopenApprovalAfterEdit(quote.id, userId, refreshed);
     }
-    res.status(201).json({ data: serializeHeader(refreshed.header) });
+    const fullPayload = await getFullQuotationPayload(quote.id);
+    res.status(201).json({ data: fullPayload });
   } catch (err) {
     next(err);
   }
@@ -843,7 +847,8 @@ quotationsRouter.patch("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SALE
     if (refreshed.header.status === "PENDING_APPROVAL") {
       await reopenApprovalAfterEdit(id, userId, refreshed);
     }
-    res.json({ data: serializeHeader(refreshed.header) });
+    const fullPayload = await getFullQuotationPayload(id);
+    res.json({ data: fullPayload });
   } catch (err) {
     next(err);
   }
@@ -878,7 +883,8 @@ quotationsRouter.delete("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SAL
     if (refreshed.header.status === "PENDING_APPROVAL") {
       await reopenApprovalAfterEdit(id, userId, refreshed);
     }
-    res.json({ data: serializeHeader(refreshed.header) });
+    const fullPayload = await getFullQuotationPayload(id);
+    res.json({ data: fullPayload });
   } catch (err) {
     next(err);
   }
@@ -888,8 +894,9 @@ quotationsRouter.delete("/:id/lines/:lineId", requireRole(ROLES.ADMIN, ROLES.SAL
 quotationsRouter.post("/:id/recalculate", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const refreshed = await recalculateAndPersistQuotation(id);
-    res.json({ data: serializeHeader(refreshed.header) });
+    await recalculateAndPersistQuotation(id);
+    const fullPayload = await getFullQuotationPayload(id);
+    res.json({ data: fullPayload });
   } catch (err) {
     next(err);
   }

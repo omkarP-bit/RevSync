@@ -9,18 +9,18 @@ pricingRouter.use(authenticate);
 
 const priceListSchema = z.object({
   name: z.string().min(1).max(255),
-  customer_tier_id: z.number().int().positive(),
+  customer_tier_id: z.coerce.number().int().positive(),
   currency_code: z.string().length(3),
   is_active: z.boolean().default(true),
 });
 
 const priceListItemSchema = z.object({
-  product_id: z.number().int().positive(),
-  unit_price: z.number().nonnegative(),
+  product_id: z.coerce.number().int().positive(),
+  unit_price: z.coerce.number().nonnegative(),
 });
 
 // GET /api/v1/pricelists
-pricingRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+pricingRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE, ROLES.WAREHOUSE_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
@@ -73,7 +73,7 @@ pricingRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MAN
 });
 
 // GET /api/v1/pricelists/:id
-pricingRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+pricingRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE, ROLES.WAREHOUSE_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
 
@@ -121,8 +121,8 @@ pricingRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_
   }
 });
 
-// POST /api/v1/pricelists (Admin only)
-pricingRouter.post("/", requireRole(ROLES.ADMIN), async (req: Request, res: Response, next: NextFunction) => {
+// POST /api/v1/pricelists (Admin, Sales Manager, Warehouse Manager, Finance)
+pricingRouter.post("/", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = priceListSchema.parse(req.body);
 
@@ -146,8 +146,8 @@ pricingRouter.post("/", requireRole(ROLES.ADMIN), async (req: Request, res: Resp
   }
 });
 
-// POST /api/v1/pricelists/:id/items (Admin only)
-pricingRouter.post("/:id/items", requireRole(ROLES.ADMIN), async (req: Request, res: Response, next: NextFunction) => {
+// POST /api/v1/pricelists/:id/items (Admin, Sales Manager, Warehouse Manager, Finance)
+pricingRouter.post("/:id/items", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const data = priceListItemSchema.parse(req.body);

@@ -226,7 +226,7 @@ src/frontend/tailwind.config.ts, postcss.config.js
 | Route | Description |
 |-------|-------------|
 | /internal | Sales Representative Dashboard with metric cards |
-| /internal/quotations | Quotations List with status filter tabs & creation modal |
+| /internal/quotations | Dual-mode Quotations Manager: **Kanban Board** (status columns, totals, quick status changer) + **List View** (status filter tabs & pagination) |
 | /internal/quotations/:id | Live Quotation Builder & Line-by-Line Editor |
 
 ---

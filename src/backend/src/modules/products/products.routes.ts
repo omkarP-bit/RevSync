@@ -11,9 +11,9 @@ const productSchema = z.object({
   sku: z.string().min(1).max(100),
   name: z.string().min(1).max(255),
   description: z.string().optional(),
-  category_id: z.number().int().positive(),
+  category_id: z.coerce.number().int().positive(),
   product_type: z.enum(["ONE_TIME", "RECURRING"]).default("ONE_TIME"),
-  base_cost: z.number().nonnegative(),
+  base_cost: z.coerce.number().nonnegative(),
   is_active: z.boolean().default(true),
 });
 
@@ -24,7 +24,7 @@ const variantSchema = z.object({
 });
 
 const relationshipSchema = z.object({
-  related_product_id: z.number().int().positive(),
+  related_product_id: z.coerce.number().int().positive(),
   relationship_type: z.enum(["UPSELL", "CROSS_SELL"]),
 });
 
@@ -43,7 +43,7 @@ function serializeProduct(product: any, userRole: number) {
 }
 
 // GET /api/v1/products
-productsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
+productsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE, ROLES.WAREHOUSE_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userRole = (req as any).user.roleId;
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
@@ -83,10 +83,8 @@ productsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MA
       [...params, limit, offset]
     );
 
-    const data = result.rows.map((p) => serializeProduct(p, userRole));
-
     res.json({
-      data,
+      data: result.rows.map((row) => serializeProduct(row, userRole)),
       meta: { page, limit, total, total_pages: Math.ceil(total / limit) },
     });
   } catch (err) {
@@ -95,7 +93,7 @@ productsRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MA
 });
 
 // GET /api/v1/products/:id
-productsRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
+productsRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE, ROLES.WAREHOUSE_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userRole = (req as any).user.roleId;
     const { id } = req.params;
@@ -152,8 +150,8 @@ productsRouter.get("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES
   }
 });
 
-// POST /api/v1/products (Admin only)
-productsRouter.post("/", requireRole(ROLES.ADMIN), async (req: Request, res: Response, next: NextFunction) => {
+// POST /api/v1/products (Admin, Sales Manager, Warehouse Manager, Finance)
+productsRouter.post("/", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userRole = (req as any).user.roleId;
     const data = productSchema.parse(req.body);
@@ -171,8 +169,8 @@ productsRouter.post("/", requireRole(ROLES.ADMIN), async (req: Request, res: Res
   }
 });
 
-// PATCH /api/v1/products/:id (Admin only)
-productsRouter.patch("/:id", requireRole(ROLES.ADMIN), async (req: Request, res: Response, next: NextFunction) => {
+// PATCH /api/v1/products/:id (Admin, Sales Manager, Warehouse Manager, Finance)
+productsRouter.patch("/:id", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userRole = (req as any).user.roleId;
     const { id } = req.params;
@@ -204,7 +202,7 @@ productsRouter.patch("/:id", requireRole(ROLES.ADMIN), async (req: Request, res:
 });
 
 // GET /api/v1/products/:id/variants
-productsRouter.get("/:id/variants", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
+productsRouter.get("/:id/variants", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE, ROLES.WAREHOUSE_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const result = await query(
@@ -220,8 +218,8 @@ productsRouter.get("/:id/variants", requireRole(ROLES.ADMIN, ROLES.SALES_REP, RO
   }
 });
 
-// POST /api/v1/products/:id/variants (Admin only)
-productsRouter.post("/:id/variants", requireRole(ROLES.ADMIN), async (req: Request, res: Response, next: NextFunction) => {
+// POST /api/v1/products/:id/variants (Admin, Sales Manager, Warehouse Manager, Finance)
+productsRouter.post("/:id/variants", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const data = variantSchema.parse(req.body);
@@ -241,7 +239,7 @@ productsRouter.post("/:id/variants", requireRole(ROLES.ADMIN), async (req: Reque
 });
 
 // GET /api/v1/products/:id/relationships
-productsRouter.get("/:id/relationships", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
+productsRouter.get("/:id/relationships", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.SALES_MANAGER, ROLES.FINANCE, ROLES.WAREHOUSE_MANAGER), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const result = await query(
@@ -266,8 +264,8 @@ productsRouter.get("/:id/relationships", requireRole(ROLES.ADMIN, ROLES.SALES_RE
   }
 });
 
-// POST /api/v1/products/:id/relationships (Admin only)
-productsRouter.post("/:id/relationships", requireRole(ROLES.ADMIN), async (req: Request, res: Response, next: NextFunction) => {
+// POST /api/v1/products/:id/relationships (Admin, Sales Manager, Warehouse Manager, Finance)
+productsRouter.post("/:id/relationships", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.WAREHOUSE_MANAGER, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const data = relationshipSchema.parse(req.body);
