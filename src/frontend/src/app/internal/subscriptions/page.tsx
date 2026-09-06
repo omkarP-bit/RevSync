@@ -47,6 +47,7 @@ export default function SubscriptionsListPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
@@ -60,6 +61,7 @@ export default function SubscriptionsListPage() {
     try {
       const params: Record<string, string> = { page: page.toString(), limit: "15" };
       if (selectedStatus) params.status = selectedStatus;
+      if (searchQuery.trim()) params.search = searchQuery.trim();
 
       const res = await api.get<ApiResponse<Subscription[]>>("/api/v1/subscriptions", params);
       setSubscriptions(res.data);
@@ -76,7 +78,7 @@ export default function SubscriptionsListPage() {
 
   useEffect(() => {
     fetchSubscriptions();
-  }, [page, selectedStatus]);
+  }, [page, selectedStatus, searchQuery]);
 
   const handleRunBillingJob = async () => {
     setBillingJobRunning(true);
@@ -169,24 +171,52 @@ export default function SubscriptionsListPage() {
         </div>
       </div>
 
-      {/* Status Filters */}
-      <div className="flex items-center space-x-1 border-b border-gray-200 overflow-x-auto pb-1">
-        {statusTabs.map((tab) => (
-          <button
-            key={tab.value}
-            onClick={() => {
-              setSelectedStatus(tab.value);
+      {/* Status Filters & Search Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-gray-200 pb-1">
+        <div className="flex items-center space-x-1 overflow-x-auto">
+          {statusTabs.map((tab) => (
+            <button
+              key={tab.value}
+              onClick={() => {
+                setSelectedStatus(tab.value);
+                setPage(1);
+              }}
+              className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap ${
+                selectedStatus === tab.value
+                  ? "bg-white border border-b-0 border-gray-200 text-indigo-600 font-semibold"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Search Bar Input */}
+        <div className="relative mb-1 sm:mb-0">
+          <input
+            type="text"
+            placeholder="Search customer, product, SKU..."
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
               setPage(1);
             }}
-            className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap ${
-              selectedStatus === tab.value
-                ? "bg-white border border-b-0 border-gray-200 text-indigo-600 font-semibold"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+            className="w-full sm:w-72 bg-white text-xs font-medium text-gray-800 border border-gray-300 rounded-lg px-3 py-2 pl-8 focus:ring-2 focus:ring-indigo-500 focus:outline-none shadow-2xs"
+          />
+          <span className="absolute left-2.5 top-2.5 text-gray-400 text-xs">🔍</span>
+          {searchQuery && (
+            <button
+              onClick={() => {
+                setSearchQuery("");
+                setPage(1);
+              }}
+              className="absolute right-2.5 top-2 text-gray-400 hover:text-gray-600 font-bold text-xs"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table Section */}

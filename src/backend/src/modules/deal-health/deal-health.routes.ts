@@ -17,7 +17,7 @@ dealHealthRouter.use(authenticate);
 
 const VIEW_ROLES = [ROLES.ADMIN, ROLES.FINANCE, ROLES.SALES_MANAGER, ROLES.SALES_REP] as const;
 const MANAGE_ROLES = [ROLES.ADMIN, ROLES.FINANCE, ROLES.SALES_MANAGER] as const;
-const CONFIG_ROLES = [ROLES.ADMIN, ROLES.SALES_MANAGER] as const;
+const CONFIG_ROLES = [ROLES.ADMIN, ROLES.FINANCE, ROLES.SALES_MANAGER] as const;
 
 const HEALTH_STATUSES = ["HEALTHY", "AT_RISK", "CRITICAL"] as const;
 const SIGNAL_KEYS = DEAL_HEALTH_SIGNALS.map((s) => s.key);
@@ -211,6 +211,28 @@ dealHealthRouter.post("/refresh", requireRole(...MANAGE_ROLES), async (req: Requ
   }
 });
 
+const SIGNAL_LABELS: Record<string, string> = {
+  STALLED_QUOTE: "Stalled quote",
+  APPROVAL_DELAY: "Approval delay",
+  INVENTORY_SHORTAGE: "Inventory shortage",
+  HIGH_DISCOUNT_RISK: "High discount risk",
+  NEGOTIATION_STALL: "Negotiation stall",
+};
+
+function normalizeSignals(rawSignals: any): any[] {
+  const parsed = typeof rawSignals === "string" ? JSON.parse(rawSignals) : (rawSignals ?? []);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map((sig: any) => ({
+    key: sig.key ?? "UNKNOWN",
+    label: sig.label ?? (SIGNAL_LABELS[sig.key] || sig.key || "Signal"),
+    weight: typeof sig.weight === "number" ? sig.weight : 1,
+    enabled: sig.enabled ?? true,
+    severity: typeof sig.severity === "number" ? sig.severity : 0,
+    contribution: typeof sig.contribution === "number" ? sig.contribution : (sig.severity ?? 0) * (sig.weight ?? 1),
+    reason: sig.reason ?? "Signal impact evaluated",
+  }));
+}
+
 async function loadSnapshot(id: string): Promise<any> {
   const result = await query(
     `SELECT dh.id, dh.public_id, dh.quotation_id, dh.customer_id, dh.sales_rep_id,
@@ -239,7 +261,7 @@ async function loadSnapshot(id: string): Promise<any> {
     sales_rep_email: row.sales_rep_email,
     status: row.status,
     score: Number(row.score),
-    signals: row.signals,
+    signals: normalizeSignals(row.signals),
     computed_at: row.computed_at,
   };
 }
@@ -281,7 +303,7 @@ dealHealthRouter.get("/", requireRole(...VIEW_ROLES), async (req: Request, res: 
     const total = parseInt(countResult.rows[0].count);
 
     const result = await query(
-      `SELECT dh.id, dh.quotation_id, dh.status, dh.score, dh.computed_at,
+      `SELECT dh.id, dh.quotation_id, dh.status, dh.score, dh.signals, dh.computed_at,
               q.quotation_number, c.name AS customer_name,
               u.email AS sales_rep_email
        FROM deal_health_snapshots dh
@@ -303,6 +325,7 @@ dealHealthRouter.get("/", requireRole(...VIEW_ROLES), async (req: Request, res: 
         sales_rep_email: row.sales_rep_email,
         status: row.status,
         score: Number(row.score),
+        signals: normalizeSignals(row.signals),
         computed_at: row.computed_at,
       })),
       meta: { page, limit, total, total_pages: Math.ceil(total / limit) },

@@ -23,11 +23,22 @@ export default function CategoriesPage() {
   const [description, setDescription] = useState("");
   const [parentId, setParentId] = useState<number | "">("");
 
-  const fetchCategories = async () => {
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+
+  const fetchCategories = async (p = page) => {
     setLoading(true);
     try {
-      const res = await api.get<ApiResponse<Category[]>>("/api/v1/categories", { limit: "100" });
+      const res = await api.get<ApiResponse<Category[]>>("/api/v1/categories", {
+        page: p.toString(),
+        limit: "10",
+      });
       setCategories(res.data);
+      if (res.meta) {
+        setTotalPages(res.meta.total_pages);
+        setTotal(res.meta.total);
+      }
     } catch (err: any) {
       setError(err.message || "Failed to load categories");
     } finally {
@@ -36,8 +47,8 @@ export default function CategoriesPage() {
   };
 
   useEffect(() => {
-    fetchCategories();
-  }, []);
+    fetchCategories(page);
+  }, [page]);
 
   const openCreateModal = () => {
     setEditingCategory(null);
@@ -139,6 +150,29 @@ export default function CategoriesPage() {
             </tbody>
           </table>
         )}
+      </div>
+
+      {/* Pagination Controls */}
+      <div className="flex justify-between items-center text-sm text-slate-500 pt-2">
+        <span>
+          Showing Page {page} of {totalPages} ({total} total categories)
+        </span>
+        <div className="flex gap-2">
+          <button
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition"
+          >
+            Previous
+          </button>
+          <button
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => p + 1)}
+            className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition"
+          >
+            Next
+          </button>
+        </div>
       </div>
 
       {/* Add / Edit Category Modal */}

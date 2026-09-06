@@ -38,20 +38,31 @@ export default function CustomerQuotationsPage() {
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
 
-  const loadQuotations = useCallback(async () => {
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+
+  const loadQuotations = useCallback(async (p = page) => {
     try {
-      const res = await api.get<ApiResponse<PortalQuotation[]>>("/api/v1/portal/quotations", { limit: "200" });
+      const res = await api.get<ApiResponse<PortalQuotation[]>>("/api/v1/portal/quotations", {
+        page: p.toString(),
+        limit: "10",
+      });
       setQuotations(res.data);
+      if (res.meta) {
+        setTotalPages(res.meta.total_pages);
+        setTotal(res.meta.total);
+      }
     } catch (err: any) {
       setError(err.message || "Failed to load quotations");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page]);
 
   useEffect(() => {
-    loadQuotations();
-  }, [loadQuotations]);
+    loadQuotations(page);
+  }, [page, loadQuotations]);
 
   const filtered = statusFilter === "ALL"
     ? quotations
@@ -135,6 +146,29 @@ export default function CustomerQuotationsPage() {
             </tbody>
           </table>
         )}
+      </div>
+
+      {/* Pagination Controls */}
+      <div className="flex justify-between items-center text-xs text-gray-500 pt-2">
+        <span>
+          Page {page} of {totalPages} ({total} total quotations)
+        </span>
+        <div className="flex gap-2">
+          <button
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            className="px-3 py-1.5 border border-gray-300 rounded bg-white font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition"
+          >
+            Previous
+          </button>
+          <button
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => p + 1)}
+            className="px-3 py-1.5 border border-gray-300 rounded bg-white font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition"
+          >
+            Next
+          </button>
+        </div>
       </div>
     </div>
   );

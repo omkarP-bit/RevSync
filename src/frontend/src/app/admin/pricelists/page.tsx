@@ -41,6 +41,13 @@ interface Product {
   sku: string;
 }
 
+const DEFAULT_CURRENCIES: Currency[] = [
+  { code: "USD", name: "US Dollar" },
+  { code: "EUR", name: "Euro" },
+  { code: "GBP", name: "British Pound" },
+  { code: "INR", name: "Indian Rupee" },
+];
+
 export default function AdminPriceListsPage() {
   const [priceLists, setPriceLists] = useState<PriceList[]>([]);
   const [selectedList, setSelectedList] = useState<PriceListDetail | null>(null);
@@ -68,34 +75,90 @@ export default function AdminPriceListsPage() {
   const fetchReferenceData = async () => {
     try {
       const curRes = await api.get<ApiResponse<Currency[]>>("/api/v1/currencies");
-      setCurrencies(curRes.data);
-      if (curRes.data.length > 0) setPlCurrency(curRes.data[0].code);
+      if (curRes.data && curRes.data.length > 0) {
+        setCurrencies(curRes.data);
+        if (!plCurrency) setPlCurrency(curRes.data[0].code);
+      } else {
+        setCurrencies(DEFAULT_CURRENCIES);
+        if (!plCurrency) setPlCurrency(DEFAULT_CURRENCIES[0].code);
+      }
+    } catch {
+      setCurrencies(DEFAULT_CURRENCIES);
+      if (!plCurrency) setPlCurrency(DEFAULT_CURRENCIES[0].code);
+    }
 
+    try {
       const prodRes = await api.get<ApiResponse<Product[]>>("/api/v1/products", { limit: "100" });
-      setProducts(prodRes.data);
-      if (prodRes.data.length > 0) setItemProductId(prodRes.data[0].id);
+      if (prodRes.data) {
+        setProducts(prodRes.data);
+        if (prodRes.data.length > 0) setItemProductId(prodRes.data[0].id);
+      }
+    } catch {
+      // ignore product error
+    }
 
-      // Customer tiers - fetch from customers route or hardcode tiers
+    try {
+      const custRes = await api.get<ApiResponse<{ tier_id: number; tier_name: string }[]>>("/api/v1/customers", { limit: "100" });
+      if (custRes.data) {
+        const tierMap = new Map<number, string>();
+        for (const c of custRes.data) {
+          if (c.tier_id && !tierMap.has(Number(c.tier_id))) {
+            tierMap.set(Number(c.tier_id), c.tier_name || `Tier ${c.tier_id}`);
+          }
+        }
+        if (tierMap.size > 0) {
+          const loadedTiers = [...tierMap.entries()].map(([id, name]) => ({ id, name }));
+          setTiers(loadedTiers);
+          setPlTierId(loadedTiers[0].id);
+        } else {
+          setTiers([
+            { id: 1, name: "Bronze" },
+            { id: 2, name: "Silver" },
+            { id: 3, name: "Gold" },
+          ]);
+          setPlTierId(1);
+        }
+      }
+    } catch {
       setTiers([
         { id: 1, name: "Bronze" },
         { id: 2, name: "Silver" },
         { id: 3, name: "Gold" },
       ]);
       setPlTierId(1);
-    } catch {
-      // ignore
     }
   };
 
-  const fetchPriceLists = async () => {
+  useEffect(() => {
+    if (products.length > 0 && (!itemProductId || !products.some((p) => p.id === itemProductId))) {
+      setItemProductId(products[0].id);
+    }
+  }, [products, itemProductId]);
+
+  useEffect(() => {
+    const list = currencies.length > 0 ? currencies : DEFAULT_CURRENCIES;
+    if (!plCurrency || !list.some((c) => c.code === plCurrency)) {
+      setPlCurrency(list[0].code);
+    }
+  }, [currencies, plCurrency]);
+
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+
+  const fetchPriceLists = async (p = page) => {
     setLoading(true);
     try {
-      const params: Record<string, string> = { limit: "50" };
+      const params: Record<string, string> = { page: p.toString(), limit: "10" };
       if (filterTier) params.tier_id = filterTier;
       if (filterCurrency) params.currency_code = filterCurrency;
 
       const res = await api.get<ApiResponse<PriceList[]>>("/api/v1/pricelists", params);
       setPriceLists(res.data);
+      if (res.meta) {
+        setTotalPages(res.meta.total_pages);
+        setTotal(res.meta.total);
+      }
       if (res.data.length > 0 && !selectedList) {
         fetchPriceListDetail(res.data[0].id);
       }
@@ -120,8 +183,8 @@ export default function AdminPriceListsPage() {
   }, []);
 
   useEffect(() => {
-    fetchPriceLists();
-  }, [filterTier, filterCurrency]);
+    fetchPriceLists(page);
+  }, [page, filterTier, filterCurrency]);
 
   const handleCreatePriceList = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -168,7 +231,14 @@ export default function AdminPriceListsPage() {
           <p className="text-sm text-gray-500">Tier × Currency scoped price resolution matrix.</p>
         </div>
         <button
-          onClick={() => setShowCreateModal(true)}
+          onClick={() => {
+            const list = currencies.length > 0 ? currencies : DEFAULT_CURRENCIES;
+            if (!plCurrency || !list.some((c) => c.code === plCurrency)) {
+              setPlCurrency(list[0].code);
+            }
+            if (currencies.length === 0) fetchReferenceData();
+            setShowCreateModal(true);
+          }}
           className="bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 text-sm font-medium"
         >
           + Add Price List
@@ -240,6 +310,27 @@ export default function AdminPriceListsPage() {
               ))}
             </div>
           )}
+
+          {/* Pagination Controls */}
+          <div className="flex justify-between items-center text-xs text-gray-500 pt-3 border-t">
+            <span>Page {page} of {totalPages} ({total})</span>
+            <div className="flex gap-1.5">
+              <button
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                className="px-2.5 py-1 border border-gray-300 rounded bg-white font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition"
+              >
+                Prev
+              </button>
+              <button
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => p + 1)}
+                className="px-2.5 py-1 border border-gray-300 rounded bg-white font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition"
+              >
+                Next
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Right Side: Selected Price List Items Matrix */}
@@ -258,7 +349,14 @@ export default function AdminPriceListsPage() {
                   </div>
                 </div>
                 <button
-                  onClick={() => setShowItemModal(true)}
+                  onClick={() => {
+                    if (products.length === 0) {
+                      fetchReferenceData();
+                    } else if (!itemProductId || !products.some((p) => p.id === itemProductId)) {
+                      setItemProductId(products[0].id);
+                    }
+                    setShowItemModal(true);
+                  }}
                   className="bg-purple-600 text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-purple-700"
                 >
                   + Add / Update Product Price
@@ -338,7 +436,7 @@ export default function AdminPriceListsPage() {
                   onChange={(e) => setPlCurrency(e.target.value)}
                   className="w-full border rounded px-3 py-2 text-sm"
                 >
-                  {currencies.map((c) => (
+                  {(currencies.length > 0 ? currencies : DEFAULT_CURRENCIES).map((c) => (
                     <option key={c.code} value={c.code}>
                       {c.code} - {c.name}
                     </option>
@@ -375,11 +473,15 @@ export default function AdminPriceListsPage() {
                   onChange={(e) => setItemProductId(Number(e.target.value))}
                   className="w-full border rounded px-3 py-2 text-sm"
                 >
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.sku})
-                    </option>
-                  ))}
+                  {products.length === 0 ? (
+                    <option value={0}>No products available</option>
+                  ) : (
+                    products.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.sku})
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
               <div>

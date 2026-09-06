@@ -54,7 +54,7 @@ currenciesRouter.get("/rates", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROL
   }
 });
 
-currenciesRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_REP, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
+currenciesRouter.get("/", requireRole(ROLES.ADMIN, ROLES.SALES_MANAGER, ROLES.SALES_REP, ROLES.FINANCE), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));

@@ -53,6 +53,7 @@ export default function InvoicesListPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [selectedStatus, setSelectedStatus] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [userRoleId, setUserRoleId] = useState<number | null>(null);
 
   // Generate-invoice modal state
@@ -69,6 +70,7 @@ export default function InvoicesListPage() {
     try {
       const params: Record<string, string> = { page: page.toString(), limit: "10" };
       if (selectedStatus) params.status = selectedStatus;
+      if (searchQuery.trim()) params.search = searchQuery.trim();
 
       const res = await api.get<ApiResponse<Invoice[]>>("/api/v1/invoices", params);
       setInvoices(res.data);
@@ -93,7 +95,7 @@ export default function InvoicesListPage() {
       }
     }
     fetchInvoices();
-  }, [page, selectedStatus]);
+  }, [page, selectedStatus, searchQuery]);
 
   const loadBillable = async () => {
     setShowGenerate(true);
@@ -143,24 +145,52 @@ export default function InvoicesListPage() {
         )}
       </div>
 
-      {/* Status Filter Tabs */}
-      <div className="flex border-b border-gray-200 gap-2 overflow-x-auto text-sm">
-        {statusTabs.map((tab) => (
-          <button
-            key={tab.value}
-            onClick={() => {
-              setSelectedStatus(tab.value);
+      {/* Status Filter Tabs & Search Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-gray-200 pb-1">
+        <div className="flex gap-2 overflow-x-auto text-sm">
+          {statusTabs.map((tab) => (
+            <button
+              key={tab.value}
+              onClick={() => {
+                setSelectedStatus(tab.value);
+                setPage(1);
+              }}
+              className={`py-2 px-4 border-b-2 font-medium whitespace-nowrap transition ${
+                selectedStatus === tab.value
+                  ? "border-blue-600 text-blue-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Search Bar Input */}
+        <div className="relative mb-1 sm:mb-0">
+          <input
+            type="text"
+            placeholder="Search invoice #, customer, quote..."
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
               setPage(1);
             }}
-            className={`py-2 px-4 border-b-2 font-medium whitespace-nowrap transition ${
-              selectedStatus === tab.value
-                ? "border-blue-600 text-blue-600"
-                : "border-transparent text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+            className="w-full sm:w-72 bg-white text-xs font-medium text-gray-800 border border-gray-300 rounded-lg px-3 py-2 pl-8 focus:ring-2 focus:ring-blue-500 focus:outline-none shadow-2xs"
+          />
+          <span className="absolute left-2.5 top-2.5 text-gray-400 text-xs">🔍</span>
+          {searchQuery && (
+            <button
+              onClick={() => {
+                setSearchQuery("");
+                setPage(1);
+              }}
+              className="absolute right-2.5 top-2 text-gray-400 hover:text-gray-600 font-bold text-xs"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
 
       {error && <div className="p-4 bg-red-50 text-red-700 rounded-md text-sm">{error}</div>}

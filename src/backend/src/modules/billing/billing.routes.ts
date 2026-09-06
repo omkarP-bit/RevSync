@@ -190,11 +190,20 @@ invoicesRouter.get("/", requireRole(ROLES.ADMIN, ROLES.FINANCE, ROLES.SALES_MANA
       where.push(`i.customer_id = $${paramIdx++}`);
       params.push(parseInt(req.query.customer_id as string));
     }
+    if (req.query.search) {
+      const searchTerm = `%${String(req.query.search).trim()}%`;
+      where.push(`(i.invoice_number ILIKE $${paramIdx} OR c.name ILIKE $${paramIdx} OR q.quotation_number ILIKE $${paramIdx})`);
+      params.push(searchTerm);
+      paramIdx++;
+    }
 
     const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
 
     const countResult = await query(
-      `SELECT COUNT(*) FROM invoices i ${whereClause}`,
+      `SELECT COUNT(*) FROM invoices i
+       JOIN customers c ON i.customer_id = c.id
+       JOIN quotations q ON i.quotation_id = q.id
+       ${whereClause}`,
       params
     );
     const total = parseInt(countResult.rows[0].count);

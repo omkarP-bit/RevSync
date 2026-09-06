@@ -140,7 +140,7 @@ export default function DealHealthPage() {
       { label: "At Risk", value: overview.counts["AT_RISK"] ?? 0, cls: "text-yellow-600" },
       { label: "Critical", value: overview.counts["CRITICAL"] ?? 0, cls: "text-red-600" },
       { label: "Total Deals", value: overview.total, cls: "text-gray-800" },
-      { label: "Avg Score", value: overview.avg_score.toFixed(1), cls: scoreColor(overview.avg_score) },
+      { label: "Avg Score", value: (overview.avg_score ?? 0).toFixed(1), cls: scoreColor(overview.avg_score ?? 0) },
     ];
     return cards.map((c) => (
       <div key={c.label} className="bg-white rounded-lg shadow p-4">
@@ -336,32 +336,42 @@ function FragmentRow({
             {s.status.replace("_", " ")}
           </span>
         </td>
-        <td className={`px-4 py-3 font-bold ${scoreColor(s.score)}`}>{s.score.toFixed(0)}</td>
+        <td className={`px-4 py-3 font-bold ${scoreColor(s.score ?? 0)}`}>{(s.score ?? 0).toFixed(0)}</td>
         <td className="px-4 py-3 text-gray-500">{new Date(s.computed_at).toLocaleString()}</td>
       </tr>
       {expanded && (
         <tr className="border-t border-gray-100 bg-gray-50">
           <td colSpan={6} className="px-6 py-4">
             <div className="text-xs font-semibold uppercase text-gray-500 mb-2">Signal Breakdown</div>
-            <div className="grid md:grid-cols-2 gap-3">
-              {s.signals.map((sig) => (
-                <div key={sig.key} className="border rounded p-3 bg-white">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-sm">{sig.label}</span>
-                    <span className="text-xs font-semibold text-gray-600">
-                      {sig.enabled ? `contribution ${sig.contribution.toFixed(1)}` : "disabled"}
-                    </span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded h-2 my-2">
-                    <div
-                      className={`h-2 rounded ${sig.severity >= 0.7 ? "bg-red-500" : sig.severity >= 0.3 ? "bg-yellow-500" : "bg-green-500"}`}
-                      style={{ width: `${(sig.enabled ? sig.severity : 0) * 100}%` }}
-                    />
-                  </div>
-                  <div className="text-xs text-gray-500">{sig.reason}</div>
-                </div>
-              ))}
-            </div>
+            {(s.signals || []).length === 0 ? (
+              <div className="text-sm text-gray-500 italic">No signal details recorded for this snapshot.</div>
+            ) : (
+              <div className="grid md:grid-cols-2 gap-3">
+                {(s.signals || []).map((sig) => {
+                  const contribution = Number(sig.contribution ?? (sig.severity ?? 0));
+                  const severity = Number(sig.severity ?? 0);
+                  const label = sig.label || sig.key || "Signal";
+                  const reason = sig.reason || "Signal evaluated";
+                  return (
+                    <div key={sig.key} className="border rounded p-3 bg-white">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-sm">{label}</span>
+                        <span className="text-xs font-semibold text-gray-600">
+                          {sig.enabled ? `contribution ${contribution.toFixed(1)}` : "disabled"}
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded h-2 my-2">
+                        <div
+                          className={`h-2 rounded ${severity >= 0.7 ? "bg-red-500" : severity >= 0.3 ? "bg-yellow-500" : "bg-green-500"}`}
+                          style={{ width: `${(sig.enabled ? severity : 0) * 100}%` }}
+                        />
+                      </div>
+                      <div className="text-xs text-gray-500">{reason}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </td>
         </tr>
       )}

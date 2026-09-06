@@ -57,15 +57,20 @@ subscriptionsRouter.get(
         params.push(status);
       }
 
-      if (req.query.customer_id) {
-        where.push(`s.customer_id = $${paramIdx++}`);
-        params.push(parseInt(req.query.customer_id as string));
+      if (req.query.search) {
+        const searchTerm = `%${String(req.query.search).trim()}%`;
+        where.push(`(c.name ILIKE $${paramIdx} OR p.name ILIKE $${paramIdx} OR s.public_id ILIKE $${paramIdx})`);
+        params.push(searchTerm);
+        paramIdx++;
       }
 
       const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
 
       const countResult = await query(
-        `SELECT COUNT(*) FROM subscriptions s ${whereClause}`,
+        `SELECT COUNT(*) FROM subscriptions s
+         JOIN customers c ON s.customer_id = c.id
+         JOIN products p ON s.product_id = p.id
+         ${whereClause}`,
         params
       );
       const total = parseInt(countResult.rows[0].count);

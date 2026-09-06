@@ -29,10 +29,21 @@ export default function ApprovalRulesPage() {
   const [minOverage, setMinOverage] = useState(5);
   const [roleSequence, setRoleSequence] = useState("2");
 
-  const fetchRules = async () => {
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+
+  const fetchRules = async (p = page) => {
     try {
-      const res = await api.get<ApiResponse<ApprovalRule[]>>("/api/v1/approvals/rules");
+      const res = await api.get<ApiResponse<ApprovalRule[]>>("/api/v1/approvals/rules", {
+        page: p.toString(),
+        limit: "10",
+      });
       setRules(res.data);
+      if (res.meta) {
+        setTotalPages(res.meta.total_pages);
+        setTotal(res.meta.total);
+      }
     } catch (err: any) {
       setError(err.message || "Failed to load approval rules");
     }
@@ -42,14 +53,14 @@ export default function ApprovalRulesPage() {
     (async () => {
       setLoading(true);
       try {
-        await fetchRules();
+        await fetchRules(page);
       } catch (err: any) {
         setError(err.message || "Failed to load approval rules");
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [page]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -205,6 +216,29 @@ export default function ApprovalRulesPage() {
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* Pagination Controls */}
+      <div className="flex justify-between items-center text-sm text-gray-500 pt-2">
+        <span>
+          Showing Page {page} of {totalPages} ({total} total approval rules)
+        </span>
+        <div className="flex gap-2">
+          <button
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            className="px-3 py-1.5 border border-gray-300 rounded bg-white text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition"
+          >
+            Previous
+          </button>
+          <button
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => p + 1)}
+            className="px-3 py-1.5 border border-gray-300 rounded bg-white text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition"
+          >
+            Next
+          </button>
+        </div>
       </div>
     </div>
   );
